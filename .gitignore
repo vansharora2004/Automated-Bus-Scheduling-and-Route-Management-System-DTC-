@@ -1,0 +1,27 @@
+# Secrets and local env
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.jks
+credentials.json
+
+# Java / Spring Boot
+target/
+.gradle/
+build/
+*.class
+*.jar
+*.war
+*.log
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
