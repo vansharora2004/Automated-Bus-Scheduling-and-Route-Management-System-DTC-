@@ -1,382 +1,821 @@
-# Project Statement — Automated Bus Scheduling & Route Management System (DTC)
+# Automated Bus Scheduling and Route Management System (DTC)
 
-> **Purpose of this document:** the single source of truth for *why* this system exists, *what* problem it solves, *who* it serves and *what* it must do. Every other document traces back to the requirements defined here:
-> [Architecture](Architecture.md) · [Implementation](Implementation.md) · [Edge cases](Edge%20case.md) · [Evaluation](Evaluation.md)
+## 1. Project Overview
 
-> **Note on figures:** numbers marked *(assumption)* are planning assumptions used for sizing and design. They must be validated against real DTC data, standing orders and applicable labour rules before production use.
+This project is a backend system for planning bus operations at Delhi Transport Corporation (DTC).
 
----
+DTC runs one of the largest city bus operations in India. Every day, someone has to decide which bus runs which trips, which driver and conductor operate which bus, when crews hand over and rest, and whether a newly proposed route simply repeats a route that already exists. Most of this work is still done by hand, using spreadsheets, paper registers and the experience of depot staff.
 
-## 1. Summary
+The system replaces that manual process with a RESTful backend that generates vehicle and crew schedules automatically, checks them against labour and operational rules, and stores routes as real geometry so that overlap and coverage can be measured rather than guessed.
 
-Delhi Transport Corporation (DTC) runs one of India's largest city bus operations. Deciding **which bus runs which trips**, **which crew operates which bus**, **when crews hand over and rest**, and **whether a proposed route duplicates an existing one** is still largely done by hand, using spreadsheets, paper registers and the experience of depot staff.
+The main capabilities are:
 
-This project builds a **Spring Boot backend** that:
+1. Automated scheduling of linked and unlinked duties for a fleet of 5,000+ buses, exposed through REST APIs.
+2. Modelling of crew-bus assignments, shift handovers and mandatory rest periods inside the scheduling algorithms.
+3. Geospatial route management using PostGIS and Hibernate Spatial, including overlap detection between existing and proposed routes, and service coverage measurement.
+4. Role-based access control using Spring Security, with pagination and filtering across 15+ API endpoints, plus reporting for schedulers, planners and managers.
 
-1. **Automates linked and unlinked duty scheduling** for a fleet of **5,000+ buses** through RESTful APIs, replacing manual spreadsheet workflows.
-2. **Models crew–bus assignments, shift handovers and mandatory rest-period constraints** in scheduling algorithms, reducing scheduling conflicts and improving resource utilization.
-3. **Manages routes geospatially** with **PostGIS** and **Hibernate Spatial**, detecting overlap between existing and proposed routes and measuring service coverage.
-4. **Enforces role-based access control** with **Spring Security**, and offers **pagination and filtering across 15+ API endpoints** for schedulers, planners and managers, backed by real-time data and reporting.
+The system is built with Java, Spring Boot, Spring Security, PostgreSQL, PostGIS and Hibernate Spatial.
 
-**Tech stack:** Java, Spring Boot, Spring Security, PostgreSQL, PostGIS, Hibernate Spatial.
-
----
-
-## 2. Background
-
-### 2.1 The organisation
-
-- DTC is the state-owned public bus operator for the National Capital Territory of Delhi.
-- The operation is **depot-based**. Buses and crew (drivers and conductors) belong to a depot. Each day, buses pull out of the depot, run trips on assigned routes and pull back in.
-- The fleet is **mixed**: CNG buses and a growing share of **electric buses**, in standard, low-floor, AC and non-AC variants. Electric buses add range and charging constraints.
-- The scope of this project is **5,000+ buses**. Sizing assumptions: **~40–50 depots**, **~10,000+ crew members** and **~50,000 trips per day** *(assumptions)*.
-
-### 2.2 How planning works today (as-is, as understood)
-
-| Step | Who | How it is done today | Output |
-|---|---|---|---|
-| 1. Route planning | Planning cell | Maps, field surveys, experience. Stop lists are kept in spreadsheets. | Route list and stop sequences |
-| 2. Timetabling | Planning cell / depots | Headways per time band turned into trip start times by hand | Timetable per route |
-| 3. Vehicle scheduling | Depot schedulers | Excel sheets that chain trips onto buses | "Bus schedule" per depot |
-| 4. Duty scheduling | Depot schedulers | Duty charts built on top of the bus schedule, mostly one crew attached to one bus | Duty chart |
-| 5. Crew rostering | Depot in-charge / time office | Registers and notice boards. Leave and absence are handled by phone. | Daily duty roster |
-| 6. Changes on the day | Depot staff | Manual edits for breakdowns, absences and diversions | Ad-hoc changes |
-
-### 2.3 Problems with the current process
-
-| # | Problem | Consequence |
-|---|---|---|
-| P1 | **Slow:** preparing schedules for a depot takes days whenever a timetable changes | The operation cannot respond quickly to demand changes, new routes or events |
-| P2 | **Error-prone:** crew or buses get double-booked, rest periods are missed and licences expire unnoticed | Trips get cancelled on the day, the organisation is exposed on labour-law compliance, and fatigue becomes a safety risk |
-| P3 | **No single source of truth:** each depot keeps its own copy of the spreadsheets | Data is inconsistent, reconciliation is impossible, and HQ cannot see the whole network |
-| P4 | **Poor crew utilization:** mostly linked (crew-tied-to-bus) duty patterns | Many short or idle duties, extra paid idle time and overtime |
-| P5 | **Poor fleet utilization:** trips are chained onto buses by hand | More buses needed at peak than necessary, plus high dead (non-revenue) kilometres |
-| P6 | **Route duplication:** new routes are proposed without quantitative overlap analysis | Several routes compete on the same corridor while other areas stay unserved |
-| P7 | **No access control or audit:** anyone with the file can edit it | Nobody knows who changed what or when, and nobody is accountable |
-| P8 | **Weak reporting:** utilization and crew hours are computed by hand, after the fact | Managers make decisions on stale or incomplete data |
+Numbers marked as assumptions in this document are planning figures used for sizing. They must be checked against real DTC data, standing orders and applicable labour rules before production use.
 
 ---
 
-## 3. Problem statement
+# 2. Background
 
-> DTC needs a centralised, secure backend that **turns timetables into conflict-free vehicle and crew schedules automatically**, supporting both **linked** and **unlinked** duties. Every schedule must satisfy **crew–bus assignment rules, shift-handover feasibility and mandatory rest-period constraints**. The system must also let planners **analyse routes geospatially**, to detect overlap between existing and proposed routes and to measure service coverage. All of this must be exposed through **role-scoped, paginated and filterable REST APIs** that give schedulers, planners and managers real-time data and reporting, at the scale of a **5,000+ bus** fleet.
+## 2.1 The organisation
 
----
+DTC is the state-owned public bus operator for the National Capital Territory of Delhi.
 
-## 4. Stakeholders and personas
+The operation is depot-based. Buses and crew belong to a depot. Each day, buses pull out of the depot, run trips on assigned routes, and pull back in at the end of the day.
 
-| Persona | Role in system | Primary goals | Key pain today |
-|---|---|---|---|
-| **Scheduler** (depot level) | `SCHEDULER` | Generate daily and periodic schedules for their depot, fix conflicts, handle absences and breakdowns | Hours of spreadsheet work; conflicts found only on the day |
-| **Planner** (HQ planning cell) | `PLANNER` | Design and modify routes and stops, build timetables, check overlap and coverage | No quantitative tool for duplication and coverage |
-| **Manager** (depot manager / HQ operations) | `MANAGER` | Approve route proposals, publish schedules, monitor utilization and compliance | No reliable, timely KPIs |
-| **Administrator** | `ADMIN` | Manage users, roles, depots and scheduling rule sets | No access control over shared files |
-| Crew (drivers and conductors) | *indirect* | Fair, legal and predictable duties | Unfair or illegal rosters, last-minute changes |
-| Commuters | *indirect* | Reliable service, sensible route network | Cancelled trips, duplicated corridors, unserved areas |
-| Transport department / auditors | *indirect* | Compliance and efficiency evidence | No audit trail |
+The fleet is mixed. It contains CNG buses and a growing share of electric buses, in standard, low-floor, AC and non-AC variants. Electric buses add range and charging constraints that the older fleet did not have.
 
----
+The scope of this project is 5,000+ buses. Sizing assumptions:
 
-## 5. Domain primer
-
-### 5.1 The service planning pipeline
-
-```mermaid
-flowchart LR
-  A[Network<br/>routes, stops, patterns] --> B[Timetable<br/>trips per route & day type]
-  B --> C[Vehicle schedule<br/>blocks: trips chained per bus]
-  C --> D[Crew schedule<br/>duties: work cut at relief points]
-  D --> E[Roster<br/>duties assigned to named crew]
-  E --> F[Day of operation<br/>publish, changes, reports]
-  A -. overlap & coverage analysis .-> A
+```text
+Depots       ~40-50
+Crew         ~10,000+
+Trips/day    ~50,000
 ```
 
-### 5.2 Glossary
+## 2.2 How planning works today
 
-| Term | Meaning |
-|---|---|
-| **Depot** | Base where buses are parked and maintained and where crew report. Buses and crew belong to one depot at a time. |
-| **Route** | Public service identified by a route number (e.g. "534"). It has one or more **patterns**. |
-| **Route pattern** | A specific path and stop sequence of a route in one **direction** (UP / DOWN / LOOP), stored as a `LineString` geometry. |
-| **Stop / terminal** | A boarding point. A **terminal** is a start or end point where buses lay over. |
-| **Relief point** | A location (usually a terminal or the depot) where one crew can hand a bus over to another. |
-| **Service day** | The operating day. It can run past midnight (for example 04:30 to 01:30 the next morning). Times are stored as seconds from the service-day start and may exceed 24:00. |
-| **Day type** | Weekday, Saturday, Sunday, Holiday. Timetables differ by day type. |
-| **Headway** | Interval between consecutive trips on a route in a time band (for example every 10 min in the peak). |
-| **Trip** | One revenue run of a pattern, from origin to destination, at a scheduled time. |
-| **Running time** | Scheduled time to complete a trip. It varies by time band (peak and off-peak). |
-| **Layover** | Scheduled wait at a terminal between trips (recovery time). |
-| **Deadhead** | Non-revenue movement: depot to terminal, or terminal to another terminal. |
-| **Pull-out / pull-in** | Leaving the depot at the start of a block / returning at the end. |
-| **Block** | The full sequence of trips, deadheads and layovers operated by **one bus** in a service day. |
-| **Peak vehicle requirement (PVR)** | Maximum number of buses in service at the same time. It sets fleet size. |
-| **Piece of work** | A continuous stretch of work on one bus between two relief opportunities. |
-| **Duty** | One crew member's working day: one or more pieces of work plus breaks, sign-on and sign-off. |
-| **Linked duty** | A duty in which the crew stays with **one bus** for the whole duty. The crew is linked to the bus. |
-| **Unlinked duty** | A duty in which the crew may operate **several buses**, changing buses at relief points. |
-| **Handover (relief)** | Transfer of a bus from an outgoing crew to an incoming crew at a relief point. |
-| **Sign-on / sign-off** | Paid time for reporting (document checks, ticket machine or waybill issue) and for closing out. |
-| **Platform time** | Time spent actually operating a bus (driving, or conducting on board). |
-| **Paid time** | Total paid duration of a duty (platform time plus sign-on/off, paid breaks, travel between relief points). |
-| **Spread-over** | Elapsed time from sign-on to sign-off, including unpaid breaks. |
-| **Split duty** | A duty with a long unpaid gap, typically one piece in the morning peak and one in the evening peak. |
-| **Rest period** | Mandatory rest: breaks within a duty, rest between consecutive duties, weekly rest. |
-| **Roster** | Assignment of duties to named crew over days, respecting leave, rest and fairness. |
-| **Route overlap** | Portion of a route's length that runs along an existing route's corridor (within a buffer distance). |
-| **Service coverage** | Share of an area (or its population) within walking distance (e.g. 500 m) of a served stop. |
+The current process runs roughly as follows:
 
-### 5.3 Linked vs unlinked duties — an example
-
-A bus **B1** has a block from **05:30 to 22:30** (17 h). No single crew can legally work that long, so it must be covered by more than one duty.
-
-**Linked duty scheduling:** each crew stays on B1.
-
-```
-Bus B1   |05:30==========================13:30|13:30=========================22:30|
-Crew A   |==== on B1 ====|brk|==== on B1 =====|                                    |
-Crew B   |                                    |==== on B1 ====|brk|=== on B1 ======|
-                                              ^ handover at relief point (same bus)
+```text
+Route planning        -> Planning cell, using maps and field surveys
+        |
+        v
+Timetabling           -> Headways converted to trip times by hand
+        |
+        v
+Vehicle scheduling    -> Excel sheets chaining trips onto buses
+        |
+        v
+Duty scheduling       -> Duty charts built on the bus schedule
+        |
+        v
+Crew rostering        -> Registers and notice boards
+        |
+        v
+Same-day changes      -> Manual edits for breakdowns and absences
 ```
 
-- Simple to operate. Accountability for the bus, its fuel and ticketing is clear.
-- **Weakness:** peak-only buses (for example 07:00–11:00 and 17:00–21:00) generate short, inefficient duties or long split duties. Breaks can only happen where that bus has a long enough layover.
+Stop lists live in spreadsheets. Leave and absence are often handled by phone. Each depot keeps its own copy of everything.
 
-**Unlinked duty scheduling:** crews move between buses at relief points.
+## 2.3 Problems with the current process
 
-```
-Bus B1   |06:00====10:00|                       Bus B7 |10:40=====14:00|
-Crew C   |== on B1 =====|--break 10:00-10:40--|== on B7 ======|
-                        ^ C hands B1 to Crew D at Terminal X; C takes B7 at Terminal X
-```
+Preparing schedules for a depot takes days whenever a timetable changes, so the operation cannot respond quickly to new routes, demand changes or events.
 
-- Combines pieces of work from different buses into full-length duties, so fewer duties, less paid idle time and less overtime.
-- **Weakness:** needs feasible handovers (time and place), limits on bus changes per duty, and tighter control.
+The process is error-prone. Crew or buses get double-booked, rest periods are missed, and licence expiry goes unnoticed until someone checks. The result is cancelled trips, exposure on labour-law compliance, and fatigue risk.
 
-The system must support **both** modes per depot and per run, and report which one performs better (see [Evaluation](Evaluation.md)).
+There is no single source of truth. Because each depot keeps its own spreadsheets, data is inconsistent and HQ cannot see the whole network.
+
+Crew utilization is poor. Duties are mostly linked, which means a crew stays with one bus, which produces many short or idle duties and extra overtime.
+
+Fleet utilization is also poor. Chaining trips onto buses by hand needs more buses at peak than necessary, and produces high dead kilometres.
+
+Routes get duplicated. New routes are proposed without any quantitative overlap analysis, so several routes compete on the same corridor while other areas stay unserved.
+
+There is no access control and no audit trail. Anyone with the file can edit it, and nobody knows who changed what.
+
+Reporting is weak. Utilization and crew hours are computed by hand after the fact, so managers decide on stale data.
 
 ---
 
-## 6. Objectives
+# 3. Problem Statement
 
-| ID | Objective | Measured by (see Evaluation) |
-|---|---|---|
-| **O1** | Automate **linked and unlinked** duty scheduling for **5,000+ buses** through REST APIs, replacing spreadsheet workflows | Trip coverage, run time at full-fleet scale, schedule lead time vs baseline |
-| **O2** | Model **crew–bus assignments, shift handovers and rest-period constraints** so schedules are conflict-free and resources are used better | Zero hard violations in published schedules, conflicts before and after, PVR, platform-to-paid ratio, duty count |
-| **O3** | Provide **geospatial route management** (PostGIS + Hibernate Spatial) with **overlap detection** and **coverage analysis** | Overlap detection precision and recall, query latency, coverage accuracy |
-| **O4** | Enforce **role-based access control** and provide **paginated, filterable APIs (15+ endpoints)** with real-time data and reporting | Authorization matrix fully tested, endpoint inventory, API latency |
-| **O5** | Make every schedule change **traceable and auditable** | Audit completeness |
+DTC needs a centralised, secure backend that turns timetables into conflict-free vehicle and crew schedules automatically, supporting both linked and unlinked duties.
+
+Every schedule must satisfy crew-bus assignment rules, shift-handover feasibility and mandatory rest-period constraints.
+
+The system must also let planners analyse routes geospatially, so that overlap between existing and proposed routes can be detected and service coverage can be measured.
+
+All of this must be exposed through role-scoped, paginated and filterable REST APIs, at the scale of a 5,000+ bus fleet.
 
 ---
 
-## 7. Scope
+# 4. Users and Roles
 
-### 7.1 In scope (v1)
+The system has four direct roles.
 
-- Master data: depots, buses (type, fuel, AC, status, maintenance windows), crew (role, licence, qualifications, leave), stops and relief points.
-- Route management: routes, directional patterns as geometries, stop sequences, running-time bands, and a proposal workflow (propose → review → approve/reject → activate).
-- Geospatial analysis: route-to-route overlap (length, ratio, shared stops, by direction), coverage gaps by zone, and the coverage gain of a proposed route.
-- Timetables: headway bands per day type, trip generation, deadhead travel-time matrix.
-- Vehicle scheduling: build blocks from trips, including depot returns for long gaps and electric-bus range limits.
-- Crew duty scheduling in **linked** and **unlinked** modes, with relief points, handovers, breaks, spread-over and pieces of work.
-- Crew assignment (rostering) for a service date or date range: eligibility, rest, weekly limits, leave, licences and fairness.
+```text
+ADMIN
+MANAGER
+PLANNER
+SCHEDULER
+```
+
+## 4.1 Scheduler
+
+Works at depot level. A scheduler can:
+
+- Generate daily and periodic schedules for their own depot.
+- Review and fix conflicts.
+- Handle absences, breakdowns and last-minute changes.
+- Apply manual overrides with a recorded reason.
+
+Today this person spends hours in spreadsheets and finds conflicts only on the day of operation.
+
+## 4.2 Planner
+
+Works in the HQ planning cell. A planner can:
+
+- Create and modify routes, patterns and stops.
+- Build timetables and headway bands.
+- Run overlap analysis on existing and proposed routes.
+- Run coverage analysis by zone.
+- Submit route proposals for review.
+
+Today this person has no quantitative tool for duplication or coverage.
+
+## 4.3 Manager
+
+Depot manager or HQ operations. A manager can:
+
+- Approve or reject route proposals.
+- Publish validated schedules.
+- View utilization, compliance and KPI reports.
+
+## 4.4 Administrator
+
+An administrator can:
+
+- Manage users and roles.
+- Manage depots.
+- Manage scheduling rule sets.
+
+## 4.5 Indirect users
+
+Crew members are affected by the output but do not use the system directly. They need duties that are fair, legal and predictable.
+
+Commuters are affected through service reliability and a sensible route network.
+
+The transport department and auditors need evidence of compliance and efficiency, which the audit log provides.
+
+---
+
+# 5. Domain Primer
+
+Bus scheduling has its own vocabulary. This section defines the terms used in every other document.
+
+## 5.1 The planning pipeline
+
+```text
+Network
+(routes, stops, patterns)
+        |
+        v
+Timetable
+(trips per route and day type)
+        |
+        v
+Vehicle schedule
+(blocks: trips chained onto one bus)
+        |
+        v
+Crew schedule
+(duties: work cut at relief points)
+        |
+        v
+Roster
+(duties assigned to named crew)
+        |
+        v
+Day of operation
+(publish, changes, reports)
+```
+
+Overlap and coverage analysis feed back into the network stage.
+
+## 5.2 Glossary
+
+Depot: base where buses are parked and maintained and where crew report. Buses and crew belong to one depot at a time.
+
+Route: a public service identified by a route number such as 534. A route has one or more patterns.
+
+Route pattern: a specific path and stop sequence of a route in one direction, stored as a LineString geometry.
+
+```text
+UP
+DOWN
+LOOP
+```
+
+Stop: a boarding point. A terminal is a start or end point where buses lay over.
+
+Relief point: a location, usually a terminal or the depot, where one crew can hand a bus over to another.
+
+Service day: the operating day. It can run past midnight, for example 04:30 to 01:30 the next morning. Times are stored as seconds from the service-day start and may exceed 24:00.
+
+Day type: the calendar category that decides which timetable applies.
+
+```text
+WEEKDAY
+SATURDAY
+SUNDAY
+HOLIDAY
+```
+
+Headway: the interval between consecutive trips on a route in a time band, for example every 10 minutes in the peak.
+
+Trip: one revenue run of a pattern, from origin to destination, at a scheduled time.
+
+Running time: the scheduled time to complete a trip. It varies by time band.
+
+Layover: scheduled recovery time at a terminal between trips.
+
+Deadhead: non-revenue movement, such as depot to terminal or terminal to terminal.
+
+Pull-out and pull-in: leaving the depot at the start of a block, and returning at the end.
+
+Block: the full sequence of trips, deadheads and layovers operated by one bus in a service day.
+
+Peak vehicle requirement (PVR): the maximum number of buses in service at the same time. It sets fleet size.
+
+Piece of work: a continuous stretch of work on one bus between two relief opportunities.
+
+Duty: one crew member's working day, made of one or more pieces of work plus breaks, sign-on and sign-off.
+
+Linked duty: a duty in which the crew stays with one bus for the whole duty.
+
+Unlinked duty: a duty in which the crew may operate several buses, changing at relief points.
+
+Handover: transfer of a bus from an outgoing crew to an incoming crew at a relief point.
+
+Sign-on and sign-off: paid time for reporting and for closing out.
+
+Platform time: time spent actually operating a bus.
+
+Paid time: the total paid duration of a duty, including platform time, sign-on and sign-off, paid breaks and travel between relief points.
+
+Spread-over: elapsed time from sign-on to sign-off, including unpaid breaks.
+
+Split duty: a duty with a long unpaid gap, typically one piece in the morning peak and one in the evening peak.
+
+Rest period: mandatory rest, covering breaks within a duty, rest between consecutive duties, and weekly rest.
+
+Roster: the assignment of duties to named crew over days, respecting leave, rest and fairness.
+
+Route overlap: the portion of a route's length that runs along an existing route's corridor, within a buffer distance.
+
+Service coverage: the share of an area, or of its population, within walking distance of a served stop.
+
+## 5.3 Linked and unlinked duties
+
+This distinction is the core of the scheduling problem, so it is worth an example.
+
+Bus B1 has a block that runs from 05:30 to 22:30, which is 17 hours. No single crew can legally work that long, so more than one duty must cover it.
+
+With linked scheduling, each crew stays on B1:
+
+```text
+Bus B1   |05:30==================13:30|13:30==================22:30|
+Crew A   |=== on B1 ===|brk|=== on B1 =|
+Crew B                                 |=== on B1 ===|brk|== on B1 =|
+                                       ^
+                              handover at relief point
+                                  (same bus)
+```
+
+This is simple to operate. Accountability for the bus, its fuel and its ticketing is clear.
+
+The weakness is that peak-only buses, running for example 07:00-11:00 and 17:00-21:00, produce short inefficient duties or long split duties. Breaks can only happen where that particular bus has a long enough layover.
+
+With unlinked scheduling, crews move between buses at relief points:
+
+```text
+Bus B1   |06:00======10:00|
+Crew C   |=== on B1 ======|--- break ---|=== on B7 ====|
+                          ^
+       C hands B1 to Crew D at Terminal X
+       C takes over B7 at Terminal X at 10:40
+
+Bus B7                                  |10:40=====14:00|
+```
+
+This combines pieces of work from different buses into full-length duties, so there are fewer duties, less paid idle time and less overtime.
+
+The weakness is that it needs feasible handovers in both time and place, a limit on bus changes per duty, and tighter operational control.
+
+The system must support both modes, selectable per depot and per run, and must report which one performs better on the same input.
+
+---
+
+# 6. Objectives
+
+```text
+O1 -> Automate linked and unlinked duty scheduling for 5,000+ buses
+      through REST APIs, replacing spreadsheet workflows.
+
+O2 -> Model crew-bus assignments, shift handovers and rest-period
+      constraints so schedules are conflict-free and resources are
+      used better.
+
+O3 -> Provide geospatial route management with overlap detection
+      and coverage analysis.
+
+O4 -> Enforce role-based access control and provide paginated,
+      filterable APIs with real-time data and reporting.
+
+O5 -> Make every schedule change traceable and auditable.
+```
+
+Each objective is measured in the Evaluation document.
+
+O1 is measured by trip coverage, run time at full-fleet scale, and schedule lead time against a baseline.
+
+O2 is measured by hard violations in published schedules, conflict counts before and after, PVR, platform-to-paid ratio and duty count.
+
+O3 is measured by overlap detection precision and recall, query latency and coverage accuracy.
+
+O4 is measured by a fully tested authorization matrix, the endpoint inventory and API latency.
+
+O5 is measured by audit completeness.
+
+---
+
+# 7. Scope
+
+## 7.1 In scope
+
+Master data:
+
+- Depots, with location.
+- Buses, including type, fuel, AC flag, status and maintenance windows.
+- Crew, including role, licence, qualifications and leave.
+- Stops and relief points.
+
+Route management:
+
+- Routes and directional patterns stored as geometries.
+- Stop sequences.
+- Running-time bands.
+- A proposal workflow from propose through review to approval and activation.
+
+Geospatial analysis:
+
+- Route-to-route overlap, including length, ratio, shared stops and direction.
+- Coverage gaps by zone.
+- The coverage gain of a proposed route.
+
+Timetables:
+
+- Headway bands per day type.
+- Trip generation.
+- A deadhead travel-time matrix.
+
+Vehicle scheduling:
+
+- Building blocks from trips.
+- Depot returns for long idle gaps.
+- Electric-bus range limits.
+
+Crew duty scheduling:
+
+- Linked and unlinked modes.
+- Relief points and handovers.
+- Breaks, spread-over and pieces of work.
+
+Crew assignment:
+
+- Rostering for a service date or date range.
+- Eligibility, rest, weekly limits, leave, licences and fairness.
+
+Operations:
+
 - Conflict detection, explanation and manual overrides with optimistic locking.
-- Schedule lifecycle: DRAFT → VALIDATED → PUBLISHED → SUPERSEDED, with versioning.
-- RBAC with depot-scoped data access. Pagination, filtering and sorting on list endpoints.
-- Reporting: fleet utilization, crew hours, schedule KPIs, overlap summary, today's operations snapshot.
+- Schedule lifecycle and versioning.
+- Role-based access control with depot-scoped data access.
+- Pagination, filtering and sorting on list endpoints.
+- Reporting on fleet utilization, crew hours, schedule KPIs, overlap and today's operations.
 - Audit log of every write.
-- OpenAPI documentation, Flyway migrations, Dockerised local environment.
+- OpenAPI documentation, Flyway migrations and a Dockerised local environment.
 
-### 7.2 Out of scope (v1). These are candidates for later versions.
+## 7.2 Out of scope
 
-- A frontend UI. The system is API-first, and any client can consume it.
-- Live GPS/AVL vehicle tracking, ETA prediction and passenger information displays.
+The following are deliberately excluded from the first version. Several are candidates for later work.
+
+- A frontend UI. The system is API-first and any client can consume it.
+- Live GPS tracking, ETA prediction and passenger information displays.
 - Ticketing, fare collection and revenue accounting.
 - Payroll computation. The system exports hours; it does not calculate pay.
 - Maintenance management beyond availability windows.
-- Demand forecasting and automatic headway optimisation (planners enter headways).
-- An exact mathematical-programming optimiser (set partitioning / column generation). v1 uses constructive heuristics plus local search behind a pluggable interface.
-- Multi-operator (cluster bus operator) settlement.
+- Demand forecasting and automatic headway optimisation. Planners enter headways.
+- An exact mathematical optimiser such as set partitioning or column generation. The first version uses constructive heuristics and local search behind a pluggable interface.
+- Multi-operator settlement for cluster bus operators.
 
 ---
 
-## 8. Functional requirements
+# 8. Functional Requirements
 
-### 8.1 Master data (FR-MD)
+## 8.1 Master data
 
-| ID | Requirement |
-|---|---|
-| FR-MD-01 | CRUD for depots, including location as a PostGIS `Point`. |
-| FR-MD-02 | CRUD for buses: registration number (normalised, unique), fleet number, depot, bus type, fuel type, AC flag, capacity, EV range, status (`ACTIVE`, `UNDER_MAINTENANCE`, `BREAKDOWN`, `RETIRED`). |
-| FR-MD-03 | Record bus unavailability windows (maintenance, charging, breakdown) as time ranges. |
-| FR-MD-04 | CRUD for crew: employee code, role (`DRIVER` / `CONDUCTOR`), depot with effective dates, licence number, class and expiry, qualifications (e.g. EV-trained, AC-bus), status, weekly off. |
-| FR-MD-05 | Record crew leave (full or partial day) and absences. |
-| FR-MD-06 | CRUD for stops with location, terminal flag and relief-point flag. |
-| FR-MD-07 | Bulk import of legacy spreadsheet data (CSV) with a per-row validation report. |
+```text
+FR-MD-01  CRUD for depots, including location as a PostGIS Point.
+FR-MD-02  CRUD for buses: registration number (normalised and
+          unique), fleet number, depot, bus type, fuel type,
+          AC flag, capacity, EV range and status.
+FR-MD-03  Bus unavailability windows for maintenance, charging and
+          breakdown, stored as time ranges.
+FR-MD-04  CRUD for crew: employee code, role, depot with effective
+          dates, licence number, class and expiry, qualifications,
+          status and weekly off.
+FR-MD-05  Crew leave, full day or partial day, and absences.
+FR-MD-06  CRUD for stops, with location, terminal flag and
+          relief-point flag.
+FR-MD-07  Bulk CSV import of legacy spreadsheet data, with a
+          per-row validation report.
+```
 
-### 8.2 Route management (FR-RT)
+Bus status values:
 
-| ID | Requirement |
-|---|---|
-| FR-RT-01 | Create and update routes with directional patterns supplied as GeoJSON `LineString` (WGS84 / EPSG:4326). |
-| FR-RT-02 | Validate geometry: valid, at least 2 distinct points, inside the service area, correct coordinate order, simplified if noisy. |
-| FR-RT-03 | Maintain the ordered stop sequence per pattern and flag stops far from the line. |
-| FR-RT-04 | **Overlap detection:** for an existing or ad-hoc proposed pattern, return overlapping routes with overlap length, overlap ratio, shared stops and direction, ranked by severity. |
-| FR-RT-05 | **Coverage analysis:** compute covered area or population share per zone within a configurable walking catchment, list coverage gaps, and compute a proposed route's coverage gain. |
-| FR-RT-06 | Route proposal workflow: `PROPOSED → UNDER_REVIEW → APPROVED/REJECTED → ACTIVE → RETIRED`. Analysis results are attached to the proposal. |
-| FR-RT-07 | Spatial filters on list endpoints: bounding box, "passes within X m of a point". |
+```text
+ACTIVE
+UNDER_MAINTENANCE
+BREAKDOWN
+RETIRED
+```
 
-### 8.3 Timetables (FR-TT)
+Crew roles:
 
-| ID | Requirement |
-|---|---|
-| FR-TT-01 | Define timetables per route and day type with validity dates. |
-| FR-TT-02 | Define headway bands per direction and running-time bands per pattern. |
-| FR-TT-03 | Generate trips from headway and running-time bands, and allow manual trip edits. |
-| FR-TT-04 | Maintain a deadhead travel-time/distance matrix between terminals and depots, by time band. |
-| FR-TT-05 | Holiday and special-day calendar overrides. |
+```text
+DRIVER
+CONDUCTOR
+```
 
-### 8.4 Vehicle scheduling (FR-VS)
+## 8.2 Route management
 
-| ID | Requirement |
-|---|---|
-| FR-VS-01 | Chain the depot's trips for a service date into blocks while respecting minimum layover, deadhead feasibility, required vehicle class, EV range and bus availability. |
-| FR-VS-02 | Insert depot return (pull-in / pull-out) when an idle gap exceeds a threshold. |
-| FR-VS-03 | Report trips that cannot be covered, with reasons (e.g. no vehicle of required class). |
-| FR-VS-04 | Assign physical buses to blocks with no double booking. |
+```text
+FR-RT-01  Create and update routes with directional patterns
+          supplied as GeoJSON LineString in EPSG:4326.
+FR-RT-02  Validate geometry: valid, at least two distinct points,
+          inside the service area, correct coordinate order,
+          simplified if noisy.
+FR-RT-03  Maintain the ordered stop sequence per pattern and flag
+          stops that sit far from the line.
+FR-RT-04  Overlap detection for an existing or ad-hoc proposed
+          pattern, returning overlapping routes with overlap
+          length, overlap ratio, shared stops and direction,
+          ranked by severity.
+FR-RT-05  Coverage analysis: covered area or population share per
+          zone within a configurable walking catchment, a list of
+          coverage gaps, and the coverage gain of a proposed route.
+FR-RT-06  Route proposal workflow, with analysis results attached
+          to the proposal.
+FR-RT-07  Spatial filters on list endpoints, such as bounding box
+          and "passes within X metres of a point".
+```
 
-### 8.5 Duty scheduling (FR-DS)
+Route lifecycle:
 
-| ID | Requirement |
-|---|---|
-| FR-DS-01 | Identify relief opportunities in every block (relief-point arrivals, depot visits). |
-| FR-DS-02 | **Linked mode:** cut each block into duties that stay on the same bus. Each duty satisfies work, continuous-work, break and spread-over rules. |
-| FR-DS-03 | **Unlinked mode:** cut blocks into pieces of work and combine pieces across buses into duties. Handover feasibility (time and place, travel between relief points, buffer) and a maximum number of bus changes per duty are enforced. |
-| FR-DS-04 | Classify duties (straight, split, broken) and compute platform, paid, break, spread-over and overtime times. |
-| FR-DS-05 | Improve the schedule by local search against a configurable cost function within a time budget. Runs are deterministic for a given seed. |
-| FR-DS-06 | Record each handover (bus, relief point, time, outgoing and incoming duty). |
+```text
+PROPOSED -> UNDER_REVIEW -> APPROVED -> ACTIVE -> RETIRED
+                         -> REJECTED
+```
 
-### 8.6 Crew assignment (FR-CA)
+## 8.3 Timetables
 
-| ID | Requirement |
-|---|---|
-| FR-CA-01 | Assign duties to named crew by role (driver, conductor where required). |
-| FR-CA-02 | Hard eligibility: depot, role, active status, not on leave, not on weekly off, valid licence on the service date, required qualifications, minimum rest since previous duty, weekly work limit, weekly rest. |
-| FR-CA-03 | Soft preferences: fair distribution of hours, early/late and night duties; continuity of driver–conductor pairs. |
-| FR-CA-04 | Explain unassigned duties with rejection reasons aggregated over candidates. |
-| FR-CA-05 | Maintain standby (spare) crew pools for absences. |
+```text
+FR-TT-01  Timetables per route and day type, with validity dates.
+FR-TT-02  Headway bands per direction and running-time bands
+          per pattern.
+FR-TT-03  Trip generation from headway and running-time bands,
+          plus manual trip edits.
+FR-TT-04  A deadhead travel-time and distance matrix between
+          terminals and depots, by time band.
+FR-TT-05  Holiday and special-day calendar overrides.
+```
 
-### 8.7 Conflicts, overrides and lifecycle (FR-CF)
+## 8.4 Vehicle scheduling
 
-| ID | Requirement |
-|---|---|
-| FR-CF-01 | Detect and persist conflicts by type and severity (`HARD` / `SOFT`), each with an explanation and the affected entities. |
-| FR-CF-02 | Manual override of assignments with optimistic locking and immediate re-validation. Hard statutory constraints cannot be overridden. Operational soft rules can be overridden by authorised roles, with a mandatory reason. |
-| FR-CF-03 | Validate a schedule. Only schedules with **zero hard conflicts** can be published. |
-| FR-CF-04 | Publishing is atomic, supersedes the previous published version, and makes the published version immutable. |
-| FR-CF-05 | Re-validate published schedules when master data changes (bus breakdown, crew leave, licence expiry) and raise new conflicts. |
-| FR-CF-06 | Only one active scheduling run per depot and service date. |
+```text
+FR-VS-01  Chain a depot's trips for a service date into blocks,
+          respecting minimum layover, deadhead feasibility,
+          required vehicle class, EV range and bus availability.
+FR-VS-02  Insert a depot return when an idle gap exceeds a
+          configured threshold.
+FR-VS-03  Report trips that cannot be covered, with reasons.
+FR-VS-04  Assign physical buses to blocks with no double booking.
+```
 
-### 8.8 Security (FR-SEC)
+## 8.5 Duty scheduling
 
-| ID | Requirement |
-|---|---|
-| FR-SEC-01 | Authentication with username and password, which issues a short-lived JWT access token and a rotating refresh token. |
-| FR-SEC-02 | Roles: `ADMIN`, `MANAGER`, `PLANNER`, `SCHEDULER`. Endpoint and method-level authorization follow the permission matrix in [Architecture](Architecture.md). |
-| FR-SEC-03 | Depot-scoped access: depot-bound users see and modify only their depot's data. |
-| FR-SEC-04 | Disabling a user or changing their roles takes effect within the access-token lifetime. |
-| FR-SEC-05 | Login rate limiting and account lockout. |
+```text
+FR-DS-01  Identify relief opportunities in every block, meaning
+          relief-point arrivals and depot visits.
+FR-DS-02  Linked mode: cut each block into duties that stay on the
+          same bus, each satisfying work, continuous-work, break
+          and spread-over rules.
+FR-DS-03  Unlinked mode: cut blocks into pieces of work and
+          combine pieces across buses into duties, enforcing
+          handover feasibility and a maximum number of bus
+          changes per duty.
+FR-DS-04  Classify duties and compute platform, paid, break,
+          spread-over and overtime times.
+FR-DS-05  Improve the schedule by local search against a
+          configurable cost function within a time budget.
+          Runs are deterministic for a given seed.
+FR-DS-06  Record each handover: bus, relief point, time, outgoing
+          duty and incoming duty.
+```
 
-### 8.9 Reporting and real-time data (FR-RP)
+Duty classes:
 
-| ID | Requirement |
-|---|---|
-| FR-RP-01 | Fleet utilization per depot and date: PVR, in-service ratio, dead-km ratio. |
-| FR-RP-02 | Crew hours: per crew, per depot, per week; overtime; distribution of rest and night duties. |
-| FR-RP-03 | Schedule KPIs: duty count, platform-to-paid ratio, split-duty share, handovers, conflicts. |
-| FR-RP-04 | Route overlap summary and coverage-gap report. |
-| FR-RP-05 | "Today" dashboard: buses out, duties unassigned, open conflicts, buses unavailable. It reflects the latest committed state. Run progress is streamed via Server-Sent Events. |
-| FR-RP-06 | CSV export of reports. |
+```text
+STRAIGHT
+SPLIT
+BROKEN
+```
 
-### 8.10 Audit (FR-AU)
+## 8.6 Crew assignment
 
-| ID | Requirement |
-|---|---|
-| FR-AU-01 | Every create, update, delete, publish, override and login event is recorded with actor, timestamp, entity, before/after values and reason. |
-| FR-AU-02 | Audit log is append-only and queryable with pagination and filters. |
+```text
+FR-CA-01  Assign duties to named crew by role, including a
+          conductor where the route or bus requires one.
+FR-CA-02  Enforce hard eligibility rules.
+FR-CA-03  Apply soft preferences.
+FR-CA-04  Explain unassigned duties with rejection reasons
+          aggregated over candidates.
+FR-CA-05  Maintain standby crew pools for absences.
+```
+
+Hard eligibility covers:
+
+- Correct depot.
+- Correct role.
+- Active status.
+- Not on leave.
+- Not on weekly off.
+- Valid licence on the service date.
+- Required qualifications.
+- Minimum rest since the previous duty.
+- Weekly work limit.
+- Weekly rest.
+
+Soft preferences cover:
+
+- Fair distribution of hours.
+- Fair distribution of early, late and night duties.
+- Continuity of driver and conductor pairs.
+
+## 8.7 Conflicts, overrides and lifecycle
+
+```text
+FR-CF-01  Detect and persist conflicts by type and severity,
+          each with an explanation and the affected entities.
+FR-CF-02  Manual override with optimistic locking and immediate
+          re-validation.
+FR-CF-03  Validate a schedule. Only schedules with zero hard
+          conflicts can be published.
+FR-CF-04  Publishing is atomic, supersedes the previous published
+          version, and makes the published version immutable.
+FR-CF-05  Re-validate published schedules when master data
+          changes, and raise new conflicts.
+FR-CF-06  Only one active scheduling run per depot and service
+          date.
+```
+
+Conflict severity:
+
+```text
+HARD
+SOFT
+```
+
+Hard statutory constraints cannot be overridden. Operational soft rules can be overridden by authorised roles, with a mandatory reason.
+
+Schedule lifecycle:
+
+```text
+DRAFT -> VALIDATED -> PUBLISHED -> SUPERSEDED
+```
+
+## 8.8 Security
+
+```text
+FR-SEC-01  Username and password authentication, issuing a
+           short-lived JWT access token and a rotating refresh
+           token.
+FR-SEC-02  Endpoint and method-level authorization against the
+           permission matrix.
+FR-SEC-03  Depot-scoped access, so depot-bound users see and
+           modify only their own depot's data.
+FR-SEC-04  Disabling a user or changing their roles takes effect
+           within the access-token lifetime.
+FR-SEC-05  Login rate limiting and account lockout.
+```
+
+## 8.9 Reporting and real-time data
+
+```text
+FR-RP-01  Fleet utilization per depot and date: PVR, in-service
+          ratio and dead-km ratio.
+FR-RP-02  Crew hours per crew, per depot and per week, including
+          overtime and the distribution of rest and night duties.
+FR-RP-03  Schedule KPIs: duty count, platform-to-paid ratio,
+          split-duty share, handovers and conflicts.
+FR-RP-04  Route overlap summary and coverage-gap report.
+FR-RP-05  A "today" dashboard reflecting the latest committed
+          state, with run progress streamed over Server-Sent
+          Events.
+FR-RP-06  CSV export of reports.
+```
+
+The today dashboard shows buses out, unassigned duties, open conflicts and unavailable buses.
+
+## 8.10 Audit
+
+```text
+FR-AU-01  Every create, update, delete, publish, override and
+          login event is recorded with actor, timestamp, entity,
+          before and after values, and reason.
+FR-AU-02  The audit log is append-only and queryable with
+          pagination and filters.
+```
 
 ---
 
-## 9. Non-functional requirements
+# 9. Non-Functional Requirements
 
-| ID | Category | Requirement (target) |
-|---|---|---|
-| NFR-01 | Performance | Paginated list endpoints: p95 < 200 ms at 50 concurrent users. Overlap analysis: p95 < 500 ms. |
-| NFR-02 | Scheduling time | One depot-day (~150 buses, ~1,500 trips *(assumption)*): < 60 s. Full fleet of 5,000+ buses: < 15 min with parallel depot runs. |
-| NFR-03 | Scalability | Stateless API nodes scale horizontally. Scheduling work is partitioned by depot and service date. |
-| NFR-04 | Correctness | A published schedule contains **zero hard-constraint violations**. Database constraints act as the final guard against double booking. |
-| NFR-05 | Determinism | Same inputs + same rule set + same seed produce an identical schedule. |
-| NFR-06 | Security | OWASP API Security Top 10 addressed. BCrypt/Argon2 password hashing. TLS in transit. Least-privilege database user. |
-| NFR-07 | Auditability | 100 % of write operations audited. |
-| NFR-08 | Availability | 99.5 % during operating hours. Database backups with point-in-time recovery. |
-| NFR-09 | Maintainability | Modular monolith with clear module boundaries. The scheduling engine is framework-independent. At least 80 % line coverage on engine and constraint code. |
-| NFR-10 | Observability | Structured logs with correlation IDs, Micrometer/Prometheus metrics, health probes. |
-| NFR-11 | Data integrity | Versioned Flyway migrations. Optimistic locking on editable aggregates. All timestamps stored as `timestamptz` in UTC and presented in IST (Asia/Kolkata). |
-| NFR-12 | Internationalisation | UTF-8 throughout, so Hindi names and stop names are supported. |
-| NFR-13 | API usability | OpenAPI 3 specification, consistent error format (RFC 7807 Problem Details), versioned under `/api/v1`. |
+## Performance
+
+Paginated list endpoints should stay under 200 ms at p95 with 50 concurrent users.
+
+Overlap analysis should stay under 500 ms at p95.
+
+One depot-day, meaning roughly 150 buses and 1,500 trips (assumption), should schedule in under 60 seconds.
+
+The full fleet of 5,000+ buses should schedule in under 15 minutes with parallel depot runs.
+
+## Scalability
+
+API nodes are stateless and scale horizontally.
+
+Scheduling work is partitioned by depot and service date, which is what makes parallel runs possible.
+
+## Correctness
+
+A published schedule must contain zero hard-constraint violations.
+
+Database constraints act as the final guard against double booking, independently of application code.
+
+## Determinism
+
+The same inputs, the same rule set and the same seed must produce an identical schedule.
+
+## Security
+
+The OWASP API Security Top 10 should be addressed.
+
+Passwords are hashed with BCrypt or Argon2. TLS is used in transit. The application connects with a least-privilege database user.
+
+## Auditability
+
+Every write operation is audited.
+
+## Availability
+
+The target is 99.5% during operating hours, with database backups and point-in-time recovery.
+
+## Maintainability
+
+The system is a modular monolith with clear module boundaries.
+
+The scheduling engine is framework-independent, and engine and constraint code should reach at least 80% line coverage.
+
+## Observability
+
+Structured logs with correlation IDs, Micrometer and Prometheus metrics, and health probes.
+
+## Data integrity
+
+Flyway migrations are versioned. Editable aggregates use optimistic locking.
+
+All timestamps are stored as `timestamptz` in UTC and presented in IST.
+
+## Other
+
+Text is UTF-8 throughout, so Hindi names and stop names work correctly.
+
+The API follows OpenAPI 3, uses a consistent error format based on RFC 7807 Problem Details, and is versioned under `/api/v1`.
 
 ---
 
-## 10. Constraints
+# 10. Constraints
 
-### 10.1 Regulatory and operational
+## 10.1 Regulatory and operational
 
-- **Working-time rules.** The Motor Transport Workers Act, 1961 is being subsumed into the Occupational Safety, Health and Working Conditions Code, 2020. Its baseline rules include roughly **≤ 8 h work per day** and **≤ 48 h per week**, a **rest interval of ≥ 30 min after no more than 5 h of work**, a **spread-over of ≤ 12 h per day** and a **weekly rest day**. **All of these are modelled as configurable rule-set parameters, never hard-coded.** The exact values must be confirmed against the statute and rules currently in force, DTC standing orders and union agreements.
+Working-time rules matter most here. The Motor Transport Workers Act, 1961 is being subsumed into the Occupational Safety, Health and Working Conditions Code, 2020. Its baseline rules include roughly:
+
+```text
+Work per day       <= 8 hours
+Work per week      <= 48 hours
+Rest interval      >= 30 min after no more than 5 hours of work
+Spread-over        <= 12 hours per day
+Weekly rest        1 day
+```
+
+All of these are modelled as configurable rule-set parameters and are never hard-coded. The exact values must be confirmed against the statute and rules currently in force, DTC standing orders and union agreements.
+
+Other operational constraints:
+
 - Crew belong to a depot. Cross-depot loans are exceptional and must be explicit.
-- Some bus types require specific qualifications (e.g. electric buses).
+- Some bus types require specific qualifications, for example electric buses.
 - Electric buses have range limits and need charging windows.
 - A published schedule must not change silently. Corrections produce a new version.
 
-### 10.2 Technical
+## 10.2 Technical
 
-- Language and frameworks: **Java 21**, **Spring Boot 3.x**, **Spring Security**, **Spring Data JPA / Hibernate 6** with **Hibernate Spatial**.
-- Database: **PostgreSQL 16** with **PostGIS 3.4** (and the `btree_gist` extension for exclusion constraints).
-- Geometry is exchanged as GeoJSON in EPSG:4326. Metric computations use a projected CRS for Delhi (UTM zone 43N, EPSG:32643).
+```text
+Java 21
+Spring Boot 3.x
+Spring Security
+Spring Data JPA / Hibernate 6
+Hibernate Spatial
+PostgreSQL 16
+PostGIS 3.4
+btree_gist extension
+```
+
+Geometry is exchanged as GeoJSON in EPSG:4326. Metric computations use a projected CRS for Delhi, UTM zone 43N, EPSG:32643.
 
 ---
 
-## 11. Assumptions
+# 11. Assumptions
 
-1. Scheduling is performed **per depot, per service date**. Weekly constraints use a rolling 7-day history of assignments.
-2. Planners supply timetables (headways and running times). The system does not forecast demand.
+1. Scheduling is performed per depot and per service date. Weekly constraints use a rolling 7-day history of assignments.
+2. Planners supply timetables, meaning headways and running times. The system does not forecast demand.
 3. Relief points are known and flagged on stops and depots.
-4. A deadhead travel-time matrix is available, or it is estimated from straight-line distance × a detour factor ÷ average speed (flagged as estimated).
-5. Each bus operates with one driver, plus one conductor where the bus or route requires it (configurable).
-6. Service days start at a configurable time (default 03:00 IST). Trips after midnight belong to the previous service day.
-7. Historical manual schedules (or a representative sample) are obtainable to form a baseline. If they are not, a naive rule-based baseline is used and this is stated explicitly in the evaluation.
-8. Zones for coverage analysis (e.g. wards or grid cells, optionally with population) can be loaded as polygons.
+4. A deadhead travel-time matrix is available. Where it is not, values are estimated from straight-line distance multiplied by a detour factor and divided by average speed, and flagged as estimated.
+5. Each bus operates with one driver, plus one conductor where the bus or route requires it. This is configurable.
+6. Service days start at a configurable time, defaulting to 03:00 IST. Trips after midnight belong to the previous service day.
+7. Historical manual schedules, or a representative sample, can be obtained to form a baseline. If they cannot, a naive rule-based baseline is used instead and this is stated explicitly in the evaluation.
+8. Zones for coverage analysis, such as wards or grid cells, can be loaded as polygons, optionally carrying population.
 
 ---
 
-## 12. Success criteria (summary)
+# 12. Technology Stack
+
+| Technology | Purpose |
+|---|---|
+| Java 21 | Backend programming language |
+| Spring Boot 3.x | Backend framework |
+| Spring MVC | REST APIs |
+| Spring Security | Authentication and authorization |
+| JWT | Stateless authentication |
+| Spring Data JPA | Persistence |
+| Hibernate 6 | ORM implementation |
+| Hibernate Spatial | Geometry mapping |
+| PostgreSQL 16 | Primary relational database |
+| PostGIS 3.4 | Geospatial storage and queries |
+| JTS | Geometry objects in Java |
+| Flyway | Database migrations |
+| Maven | Dependency and build management |
+| JUnit 5 | Testing |
+| Mockito | Unit-test mocking |
+| Testcontainers | Integration testing against real PostGIS |
+| Micrometer / Prometheus | Metrics |
+| springdoc-openapi | API documentation |
+| Docker Compose | Local infrastructure |
+| Git and GitHub | Version control and hosting |
+
+---
+
+# 13. Success Criteria
 
 The project succeeds when, on a realistic dataset at 5,000+ bus scale:
 
-- **100 %** of trips are covered by blocks, or every uncovered trip is explained by a recorded conflict.
-- Published schedules contain **0** hard-constraint violations, verified by an independent validator and by SQL invariant checks.
-- Unlinked scheduling needs **fewer duties and less paid idle time** than linked scheduling and the baseline on the same input.
-- Schedule generation completes within the NFR-02 time targets, replacing multi-day manual preparation.
-- Route overlap detection reaches the precision and recall targets on a labelled set of route pairs.
-- Every endpoint–role combination in the permission matrix is covered by automated authorization tests.
+```text
+Every trip is covered by a block, or every uncovered trip is
+explained by a recorded conflict.
 
-Detailed metrics, baselines, datasets and acceptance thresholds are in [Evaluation.md](Evaluation.md).
+Published schedules contain zero hard-constraint violations,
+verified by an independent validator and by SQL invariant checks.
+
+Unlinked scheduling needs fewer duties and less paid idle time
+than linked scheduling and than the baseline, on the same input.
+
+Schedule generation completes within the stated time targets,
+replacing multi-day manual preparation.
+
+Route overlap detection meets its precision and recall targets
+on a labelled set of route pairs.
+
+Every endpoint and role combination in the permission matrix is
+covered by automated authorization tests.
+```
+
+Detailed metrics, baselines, datasets and acceptance thresholds are defined in the Evaluation document.
 
 ---
 
-## 13. Related documents
+# 14. Related Documents
 
-| Document | Contents |
-|---|---|
-| [Architecture.md](Architecture.md) | System architecture, modules, data model, algorithms, security, API catalogue, key decisions |
-| [Implementation.md](Implementation.md) | Phase-wise build plan with tasks, code sketches, deliverables and exit criteria |
-| [Edge case.md](Edge%20case.md) | Catalogue of edge cases and how each is handled and tested |
-| [Evaluation.md](Evaluation.md) | Evaluation framework: metrics, baselines, experiments, acceptance criteria |
+```text
+Architecture.md    -> modules, data model, algorithms, security, APIs
+Implementation.md  -> phase-wise build plan
+Edge case.md       -> edge cases and how each is handled and tested
+Evaluation.md      -> metrics, baselines, experiments, acceptance
+```
