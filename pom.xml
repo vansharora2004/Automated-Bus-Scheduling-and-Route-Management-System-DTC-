@@ -23,36 +23,12 @@
     <mapstruct.version>1.6.3</mapstruct.version>
     <springdoc.version>2.8.6</springdoc.version>
     <bucket4j.version>8.10.1</bucket4j.version>
-    <!-- Testcontainers 1.21.2 bundles docker-java 3.4.2, whose named-pipe transport cannot
-         complete a /info call against Docker Engine 29 on Windows. Overridden until the
-         Testcontainers BOM catches up. -->
-    <docker-java.version>3.5.1</docker-java.version>
     <jqwik.version>1.9.3</jqwik.version>
     <archunit.version>1.4.1</archunit.version>
     <spotless.version>2.44.3</spotless.version>
     <spotbugs.version>4.8.6.6</spotbugs.version>
     <docker.api.version>1.44</docker.api.version>
   </properties>
-
-  <dependencyManagement>
-    <dependencies>
-      <dependency>
-        <groupId>com.github.docker-java</groupId>
-        <artifactId>docker-java-api</artifactId>
-        <version>${docker-java.version}</version>
-      </dependency>
-      <dependency>
-        <groupId>com.github.docker-java</groupId>
-        <artifactId>docker-java-transport</artifactId>
-        <version>${docker-java.version}</version>
-      </dependency>
-      <dependency>
-        <groupId>com.github.docker-java</groupId>
-        <artifactId>docker-java-transport-zerodep</artifactId>
-        <version>${docker-java.version}</version>
-      </dependency>
-    </dependencies>
-  </dependencyManagement>
 
   <dependencies>
     <!-- Web and validation -->
@@ -218,13 +194,21 @@
             <include>**/*Test.java</include>
             <include>**/*Tests.java</include>
           </includes>
-          <environmentVariables>
-            <!-- docker-java, bundled inside Testcontainers, otherwise negotiates Docker API 1.32.
-                 Docker Engine 25 and later refuse anything below 1.40. Pinning this here rather than
-                 in a developer's shell is what lets `./mvnw verify` work from a clean checkout.
-                 Raise the floor only when the minimum supported Docker Engine moves with it. -->
-            <DOCKER_API_VERSION>${docker.api.version}</DOCKER_API_VERSION>
-          </environmentVariables>
+          <systemPropertyVariables>
+            <!-- docker-java defaults to Docker API 1.32, and Docker Engine 25 and later refuse
+                 anything below 1.40, so Testcontainers cannot even reach /info. The wire log shows
+                 `GET /v1.32/info` returning 400.
+
+                 It has to be this system property. The DOCKER_API_VERSION environment variable is
+                 ignored on the path Testcontainers uses, because its strategies build a
+                 TransportConfig carrying only the docker host and TLS config, so docker-java falls
+                 back to its compiled-in default. Setting it here is what lets `./mvnw verify` work
+                 from a clean checkout instead of depending on a developer's shell.
+
+                 Raise this only together with the minimum Docker Engine the project supports:
+                 1.44 needs Engine 25 or newer (January 2024). -->
+            <api.version>${docker.api.version}</api.version>
+          </systemPropertyVariables>
         </configuration>
       </plugin>
 

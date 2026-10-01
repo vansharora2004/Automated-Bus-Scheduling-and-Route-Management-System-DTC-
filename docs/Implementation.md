@@ -206,6 +206,25 @@ archunit-junit5
 
 Every version will be pinned to the latest stable release compatible with the chosen Spring Boot version.
 
+## Testcontainers against a recent Docker Engine
+
+docker-java, which Testcontainers uses internally, defaults to Docker API version 1.32. Docker Engine 25 and later reject anything below 1.40, so container startup fails before it begins with a 400 on `/info`.
+
+The build therefore sets the API version as a surefire system property:
+
+```text
+api.version = 1.44
+```
+
+It has to be the system property. The `DOCKER_API_VERSION` environment variable is ignored on this path, because Testcontainers' client strategies build a transport config carrying only the docker host and TLS settings, leaving docker-java on its compiled-in default.
+
+Two symptoms worth recognising, since neither names the real cause:
+
+- `client version 1.32 is too old` — the honest version of the error.
+- `Could not find a valid Docker environment`, with a 400 whose body is an Info object with every field empty. This is the same failure after an API version is set but not read.
+
+Raise `1.44` only together with the minimum Docker Engine the project supports.
+
 ## Before moving on
 
 ```text
