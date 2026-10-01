@@ -1,0 +1,78 @@
+spring:
+  application:
+    name: dtc-transit
+  datasource:
+    # Port 55432 matches docker-compose.yml, which deliberately avoids 5432 so a locally
+    # installed PostgreSQL cannot be reached by accident.
+    url: ${DB_URL:jdbc:postgresql://localhost:55432/dtc_transit}
+    username: ${DB_USER:dtc}
+    password: ${DB_PASSWORD:local_dev_only}
+    hikari:
+      maximum-pool-size: 20
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+          batch_size: 500
+        order_inserts: true
+        order_updates: true
+  data:
+    web:
+      pageable:
+        default-page-size: 20
+        max-page-size: 100
+  threads:
+    virtual:
+      enabled: true
+  flyway:
+    enabled: true
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+
+server:
+  error:
+    whitelabel:
+      enabled: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  time:
+    zone: Asia/Kolkata
+    service-day-start: "03:00"
+
+logging:
+  level:
+    root: INFO
+    com.dtc.transit: DEBUG
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+springdoc:
+  swagger-ui:
+    enabled: false
+logging:
+  level:
+    com.dtc.transit: INFO

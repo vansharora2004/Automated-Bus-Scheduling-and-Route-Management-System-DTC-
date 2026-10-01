@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: dtc-transit-db
+    environment:
+      POSTGRES_DB: dtc_transit
+      POSTGRES_USER: dtc
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-local_dev_only}
+    ports:
+      # Host port 55432, not 5432. A locally installed PostgreSQL commonly already owns 5432, and
+      # when both listen the client silently reaches the wrong server and fails authentication.
+      # Override with DB_PORT if 55432 is taken too.
+      - "${DB_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dtc -d dtc_transit"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:
