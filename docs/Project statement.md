@@ -1,14 +1,16 @@
 # Automated Bus Scheduling and Route Management System (DTC)
 
+> **Status: design document.** Implementation has not started. The repository currently contains documentation only. This document describes the complete target system that the 11 implementation phases will build.
+
 ## 1. Project Overview
 
-This project is a backend system for planning bus operations at Delhi Transport Corporation (DTC).
+This project will build a backend system for planning bus operations at Delhi Transport Corporation (DTC).
 
 DTC runs one of the largest city bus operations in India. Every day, someone has to decide which bus runs which trips, which driver and conductor operate which bus, when crews hand over and rest, and whether a newly proposed route simply repeats a route that already exists. Most of this work is still done by hand, using spreadsheets, paper registers and the experience of depot staff.
 
-The system replaces that manual process with a RESTful backend that generates vehicle and crew schedules automatically, checks them against labour and operational rules, and stores routes as real geometry so that overlap and coverage can be measured rather than guessed.
+The system will replace that manual process with a RESTful backend that generates vehicle and crew schedules automatically, checks them against labour and operational rules, and stores routes as real geometry so that overlap and coverage can be measured rather than guessed.
 
-The main capabilities are:
+The main capabilities the system is designed to provide are:
 
 1. Automated scheduling of linked and unlinked duties for a fleet of 5,000+ buses, exposed through REST APIs.
 2. Modelling of crew-bus assignments, shift handovers and mandatory rest periods inside the scheduling algorithms.
@@ -811,7 +813,41 @@ Detailed metrics, baselines, datasets and acceptance thresholds are defined in t
 
 ---
 
-# 14. Related Documents
+# 14. Delivery Plan
+
+The system will be built in 11 phases. Each phase ends with a working, tested increment and explicit verification checks before the next begins.
+
+```text
+Phase 1   Spring Boot + PostGIS setup
+Phase 2   Auth + JWT + RBAC
+Phase 3   Master data + pagination/filtering
+Phase 4   Routes + Spatial + overlap
+Phase 5   Timetables + trips + datasets
+Phase 6   Vehicle scheduling
+Phase 7   Rest rules + linked duties
+Phase 8   Unlinked duties + handovers
+Phase 9   Crew assignment + conflicts + publish
+Phase 10  Reports + dashboard + audit
+Phase 11  Final testing + Docker + monitoring
+```
+
+Phases 1 to 5 build infrastructure and no scheduling happens in them. Phases 6 to 9 deliver the core capability, turning timetabled trips into published crew and vehicle schedules. Phase 10 reports on what Phase 9 publishes, and Phase 11 proves the system is fast, secure and deployable.
+
+Objectives map to phases as follows:
+
+```text
+O1  Phases 6, 7, 8        automated linked and unlinked scheduling
+O2  Phases 7, 8, 9        crew-bus assignment, handovers, rest rules
+O3  Phase 4               geospatial route management
+O4  Phases 2, 3, 10       RBAC, pagination and filtering, reporting
+O5  Phases 2, 9, 10       audit trail across every write
+```
+
+The phase-by-phase build order, components and verification checks are in the Implementation document.
+
+---
+
+# 15. Related Documents
 
 ```text
 Architecture.md    -> modules, data model, algorithms, security, APIs

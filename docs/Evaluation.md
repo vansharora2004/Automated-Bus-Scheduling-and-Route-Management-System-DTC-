@@ -1,12 +1,14 @@
 # Automated Bus Scheduling and Route Management System — Evaluation
 
+> **Status: design document.** Implementation has not started. Every number in this document is a target or a threshold that the finished system will be measured against. No measured result exists yet, and none is claimed anywhere below.
+
 ## 1. Purpose
 
-This document defines what "working" and "better" mean for the system, how each claim is measured, against which baseline, and what has to be true before the project can be called complete.
+This document defines what "working" and "better" will mean for the system, how each claim will be measured, against which baseline, and what has to be true before the project can be called complete.
 
 Every number below is a target or a threshold. None of them is a result.
 
-Measured results go into the report template in section 14, after an actual evaluation run. A claim such as "reduced scheduling conflicts" is only made once a measured value backs it against a stated baseline.
+Measured results will go into the report template in section 14, after an actual evaluation run. A claim such as "reduced scheduling conflicts" will only be made once a measured value backs it against a stated baseline.
 
 ## Principles
 
@@ -806,57 +808,95 @@ Every ID in section 16, which covers operational cases outside the first version
 
 The CI report lists every `EC-*` ID with its test status, and missing IDs are reported as gaps rather than quietly ignored.
 
+## 12.4 When each kind of test is written
+
+Testing is not a phase at the end. Most of it is written alongside the feature it covers, and Phase 11 only adds the checks that need a finished system.
+
+```text
+Phase 1   Testcontainers base class, ArchUnit rules
+Phase 2   Permission matrix test skeleton, token attack tests
+Phase 3   Pagination and filtering edge cases, cross-depot tests
+Phase 4   Geometry fixtures with known answers, spatial
+          integration tests
+Phase 5   Trip count assertions, dataset checksum tests
+Phase 6   PROP-01 to PROP-03, run lifecycle and crash tests
+Phase 7   One unit test per constraint, boundary tests
+Phase 8   PROP-04, PROP-06, PROP-09, PROP-10, determinism tests
+Phase 9   PROP-07, PROP-08, SQL invariants, concurrency tests,
+          the raw-SQL exclusion-constraint test
+Phase 10  Report recomputation tests, audit completeness test
+Phase 11  Load tests, query plan review, dependency and API
+          security scans, soak test, restore rehearsal
+```
+
+The permission matrix test is the clearest case. It is created in Phase 2 with only a few endpoints and grows in every later phase, so a new endpoint that nobody classified makes the build fail. Written for the first time in Phase 11, it would instead be reconstructed from finished code, which is exactly when a wrong assumption becomes permanent.
+
 ---
 
 # 13. Acceptance Criteria per Phase
 
+These are the "before moving on" checks from the implementation plan, restated as acceptance evidence. A phase is not complete until its checks pass.
+
 ```text
-P0  Foundations
+Phase 1  Spring Boot + PostGIS setup
     Clean build with Testcontainers. Migrations apply to an empty
-    database. The ArchUnit engine-purity rule passes.
+    database. /actuator/health returns UP. The ArchUnit
+    engine-purity rule exists and passes.
 
-P1  Security
-    Authentication tests pass. The matrix test skeleton is in place.
-    Login is audited.
+Phase 2  Auth + JWT + RBAC
+    No token gives 401, wrong role 403, other depot 404.
+    alg=none and HS256-confusion tokens rejected. A disabled
+    user's token is rejected after the cache TTL. The permission
+    matrix test skeleton is in place. Login is audited.
 
-P2  Master data
+Phase 3  Master data + pagination/filtering
     Pagination edge cases EC-API-01 to EC-API-10 pass. Cross-depot
-    tests pass. Filtered queries use indexes.
+    tests pass. Filtered queries use indexes on 100k rows. The
+    paging framework is reused by at least four list endpoints.
 
-P3  Routes and GIS
-    Geometry fixtures pass. Overlap p95 under 500 ms. Proposal
-    workflow tests pass.
+Phase 4  Routes + Spatial + overlap
+    Geometry fixtures pass: identical routes ~1.00, parallel road
+    at 40 m 0.00, crossing 0.00, 3 km on 10 km 0.30. Overlap p95
+    under 500 ms. Proposal workflow tests pass.
 
-P4  Timetables
+Phase 5  Timetables + trips + datasets
     Trip counts match analytical counts. DS-S, DS-M and DS-L
-    generate deterministically, verified by checksum.
+    generate deterministically, verified by checksum. Holiday
+    override changes the timetable picked.
 
-P5  Blocks
-    PROP-01 to PROP-03 pass. DS-S coverage is 100% or explained.
-    The greedy PVR gap against matching is reported.
+Phase 6  Vehicle scheduling
+    PROP-01 to PROP-03 pass. DS-S coverage is 100% or explained,
+    in under 5 s. The greedy PVR gap against the matching lower
+    bound is reported. Duplicate run returns 409. A killed worker
+    leaves no partial rows.
 
-P6  Linked duties
+Phase 7  Rest rules + linked duties
     PROP-05 passes. A DS-S linked run has no unexplained hard
-    violations. Constraint boundary tests pass.
+    violations. Constraint boundary tests pass. Changing a rule
+    value changes output with no code change.
 
-P7  Unlinked duties
+Phase 8  Unlinked duties + handovers
     PROP-04, PROP-06, PROP-09 and PROP-10 pass. The A3 and A5
-    comparison against A1 is recorded on DS-M.
+    comparison against A1 is recorded on DS-M. Per-depot run under
+    60 s including a 30 s search budget.
 
-P8  Assignment and publish
+Phase 9  Crew assignment + conflicts + publish
     PROP-07 and PROP-08 pass. SQL invariants return zero rows on
-    DS-L. Concurrency tests pass.
+    DS-L. Concurrency tests pass. A raw-SQL overlapping published
+    assignment is rejected by the exclusion constraint.
 
-P9  Reporting
+Phase 10 Reports + dashboard + audit
     Report figures equal an independent recomputation on DS-S.
-    The audit completeness test passes.
+    Superseded versions excluded. The audit completeness test
+    passes.
 
-P10 Hardening
-    Performance targets met, or deviations documented. Scans clean.
-    A restore rehearsal succeeds.
+Phase 11 Final testing + Docker + monitoring
+    Performance targets met, or deviations documented with a root
+    cause. Dependency and API scans clean. A restore rehearsal
+    succeeds and the restored database passes INV-01 to INV-09.
 ```
 
-Final acceptance for release 1.0 requires all phase criteria met, plus the compliance criteria in section 6.3 on DS-L and DS-R, plus the section 5 quality targets for unlinked mode against B2 on DS-M.
+Final acceptance for release 1.0 will require all phase criteria met, plus the compliance criteria in section 6.3 on DS-L and DS-R, plus the section 5 quality targets for unlinked mode against B2 on DS-M.
 
 ---
 

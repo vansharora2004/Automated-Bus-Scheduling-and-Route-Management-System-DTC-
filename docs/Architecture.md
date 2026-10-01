@@ -1,10 +1,12 @@
 # Automated Bus Scheduling and Route Management System — Architecture
 
+> **Status: design document.** This describes the target architecture that the 11 implementation phases will produce. None of it is implemented yet. Present-tense statements below describe how the finished system is designed to behave, not how anything currently behaves.
+
 ## 1. Architecture Overview
 
-The application is a single Spring Boot service backed by PostgreSQL with PostGIS.
+The application will be a single Spring Boot service backed by PostgreSQL with PostGIS.
 
-It is built as a modular monolith. There is one deployable unit, but the code is split into domain modules with enforced boundaries, and any module can be extracted later if that ever becomes necessary.
+It will be built as a modular monolith. There will be one deployable unit, but the code is split into domain modules with enforced boundaries, and any module can be extracted later if that ever becomes necessary.
 
 The high-level architecture is:
 
@@ -236,6 +238,28 @@ infra/        -> repositories, native spatial queries, specifications
 ```
 
 DTOs are mapped with MapStruct. Entities are never serialised directly, which avoids lazy-loading problems and mass-assignment vulnerabilities.
+
+## 4.4 Which phase builds which part
+
+The architecture below is the finished target. It will be built up across the 11 phases in the implementation plan:
+
+```text
+Phase 1   project skeleton, common module, PostGIS, Flyway,
+          ArchUnit rules
+Phase 2   security module, user module, audit infrastructure
+Phase 3   masterdata module, the paging and filtering framework
+Phase 4   route module, spatial storage, overlap and coverage
+Phase 5   timetable module, deadhead matrix, dataset generator
+Phase 6   scheduling.engine vehicle stage, run queue, persistence
+Phase 7   rule sets, constraint catalogue, linked duty builder
+Phase 8   piece cutter, unlinked duty builder, local search
+Phase 9   crew assignment, conflicts, overrides, publish,
+          database exclusion constraints
+Phase 10  reporting module, dashboard, audit query endpoints
+Phase 11  metrics, dashboards, Docker packaging, deployment
+```
+
+Two things are deliberately built early rather than late. Security comes in Phase 2, before any domain data exists, because depot scoping is far harder to retrofit onto finished endpoints. The exclusion constraints arrive with the assignment table in Phase 9 rather than being added afterwards, because they are the guarantee that the rest of the design depends on.
 
 ---
 
@@ -1397,7 +1421,7 @@ GET    /dashboard/today                  ADMIN, MANAGER, SCHEDULER
 GET    /audit-logs                  [P]  ADMIN, MANAGER
 ```
 
-In total there are 48 endpoints, 22 of them paginated and filterable.
+The catalogue totals 48 endpoints, 22 of them paginated and filterable. They will be delivered across Phases 2 to 10, and the endpoint inventory will be verified against the OpenAPI export in Phase 11.
 
 ---
 
@@ -1494,7 +1518,9 @@ ArchUnit rules check module boundaries and engine purity on every build.
 +---------------------------------------------------+
 ```
 
-The image is a layered Spring Boot jar on a JRE 21 base image, run as a non-root user.
+Docker appears at two points in the plan, for two different reasons. Phase 1 uses Docker Compose to run the local PostGIS database. Phase 11 packages the application itself as an image.
+
+The image will be a layered Spring Boot jar on a JRE 21 base image, run as a non-root user.
 
 Local development uses Docker Compose with `postgis/postgis:16-3.4`.
 

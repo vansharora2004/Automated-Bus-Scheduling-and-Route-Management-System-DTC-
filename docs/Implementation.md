@@ -1,102 +1,133 @@
 # Automated Bus Scheduling and Route Management System — Implementation Plan
 
+> **Status: design document.** Nothing described here is implemented yet. The repository currently contains documentation only. This is the roadmap the project will follow, starting with Phase 1 once the documentation is finalised.
+
 ## Overview
 
-The project is built incrementally.
+The system will be built in 11 phases.
 
-Each phase ends with a working, tested, demonstrable increment and explicit exit criteria. Nothing moves to the next phase until the current one runs.
+Each phase will end with a working, tested, demonstrable increment and explicit verification checks. Nothing moves to the next phase until the current phase's checks pass.
 
 Durations are indicative, for one to two developers.
 
 ```text
-Phase 0  -> Foundations                          1 week
-Phase 1  -> Security and RBAC                    1 week
-Phase 2  -> Master data, paging and filtering    2 weeks
-Phase 3  -> Route management and geospatial      2 weeks
-Phase 4  -> Timetables, trips, synthetic data    1 week
-Phase 5  -> Vehicle scheduling (blocks)          1 week
-Phase 6  -> Constraint engine and linked duties  2 weeks
-Phase 7  -> Unlinked duties and handovers        2 weeks
-Phase 8  -> Crew assignment, conflicts, publish  2 weeks
-Phase 9  -> Reporting, dashboard and audit       1 week
-Phase 10 -> Hardening and deployment             1 week
+Phase 1  -> Spring Boot + PostGIS setup                1 week
+Phase 2  -> Auth + JWT + RBAC                          1 week
+Phase 3  -> Master data + pagination/filtering         2 weeks
+Phase 4  -> Routes + Spatial + overlap                 2 weeks
+Phase 5  -> Timetables + trips + datasets              1 week
+Phase 6  -> Vehicle scheduling                         1 week
+Phase 7  -> Rest rules + linked duties                 2 weeks
+Phase 8  -> Unlinked duties + handovers                2 weeks
+Phase 9  -> Crew assignment + conflicts + publish      2 weeks
+Phase 10 -> Reports + dashboard + audit                1 week
+Phase 11 -> Final testing + Docker + monitoring        1 week
 
-Total                                            ~16 weeks
+Total                                                  ~16 weeks
 ```
 
 Phase order is not arbitrary. Each phase depends on what came before:
 
 ```text
-P0 Foundations
+P1 Setup
       |
       v
-P1 Security
+P2 Security
       |
       v
-P2 Master data
+P3 Master data
       |
       +----------------+
       |                |
       v                v
-P3 Routes & GIS    P4 Timetables
+P4 Routes & GIS    P5 Timetables
       |                |
       +--------+-------+
                |
                v
-          P5 Blocks
+      P6 Vehicle scheduling
                |
                v
-      P6 Linked duties
+      P7 Rest rules & linked duties
                |
         +------+------+
         |             |
         v             v
-P7 Unlinked      P8 Assignment
+P8 Unlinked      P9 Assignment
   duties            & publish
         |             |
         +------+------+
                |
                v
-        P9 Reporting
+        P10 Reporting
                |
                v
-        P10 Hardening
+        P11 Hardening
 ```
+
+Phases 1 to 5 build infrastructure, and no scheduling happens in them. Phases 6 to 9 are the actual product. Phase 10 reads what Phase 9 publishes, and Phase 11 proves the whole thing is fast, secure and deployable.
+
+## The repeatable loop for every phase
+
+The same order will be used inside each phase, because it prevents most rework:
+
+```text
+Flyway migration -> Entity -> Repository -> Service -> Controller -> Tests
+```
+
+The migration is written first so the schema stays the source of truth. Hibernate will run with `ddl-auto: validate`, so it can never silently change a table.
 
 ## Definition of done
 
-These apply to every phase, not just the ones where they are obviously relevant:
+These apply to every phase, not only the ones where they are obviously relevant:
 
-1. Code follows the module and layer boundaries defined in the architecture. ArchUnit tests pass.
+1. Code follows the module and layer boundaries defined in the architecture document. ArchUnit tests pass.
 2. Unit tests cover domain logic. Integration tests using Testcontainers cover repositories and native SQL.
 3. New endpoints appear in OpenAPI with request and response examples and the roles they require.
 4. Authorization tests exist for every new endpoint and role combination.
 5. A Flyway migration is added, and the schema starts cleanly from an empty database.
-6. The relevant edge cases have tests.
-7. The phase exit criteria are met and demonstrated.
+6. The relevant edge cases from the edge-case document have tests.
+7. The phase's "before moving on" checks are met and demonstrated.
+
+Algorithm designs, data model and API contracts are specified in the architecture document. This document covers the order of work, not the algorithms themselves.
 
 ---
 
-# Phase 0 — Foundations
+# Phase 1 — Spring Boot + PostGIS Setup
 
-## Goal
+## Objective
 
-A reproducible project skeleton that builds, runs against a local PostGIS, and has test infrastructure ready before any domain code is written.
+Phase 1 will create an empty but runnable Spring Boot project connected to a local PostGIS database, with migrations and test infrastructure in place. No business features are built in this phase.
 
-## Tasks
+The goal is that every later phase has somewhere to put its code and a way to test it against a real database.
 
-1. Generate a Spring Boot 3.x project with Java 21 and Maven, base package `com.dtc.transit`.
-2. Add the dependencies listed below.
-3. Write `docker-compose.yml` with PostGIS.
-4. Set up profiles `local`, `test` and `prod`, with configuration externalised through environment variables.
-5. Add Flyway `V1__extensions.sql` creating `postgis`, `btree_gist` and the sequences.
-6. Build the `common` module: `ProblemDetail` handler, `Clock` bean, correlation ID filter, `ServiceTime` utilities.
-7. Add a Testcontainers base class using `postgis/postgis:16-3.4`.
-8. Add an ArchUnit test skeleton enforcing module boundaries.
+## Build order
+
+1. Generate the project — Java 21, Maven, base package `com.dtc.transit`.
+2. Write `docker-compose.yml` using `postgis/postgis:16-3.4` and start it.
+3. Write `application.yml` — datasource, `open-in-view: false`, `ddl-auto: validate`, UTC JDBC timezone, batch size 500.
+4. Write the first Flyway migration creating the `postgis` and `btree_gist` extensions plus the ID sequences.
+5. Create the empty package folders for all modules now, so later phases have a home.
+6. Build the `common` module basics — problem-details error handler, injected `Clock` bean, correlation ID filter, service-time utilities.
+7. Add the Testcontainers base class and one throwaway test that connects to it.
+8. Add the ArchUnit rule that `scheduling.engine` must not import Spring or JPA.
 9. Add springdoc-openapi and Actuator, exposing health, info and prometheus.
-10. Add formatting and static analysis: Spotless, plus Error Prone or SpotBugs.
+10. Add formatting and static analysis.
+
+## Key components
+
+```text
+TransitApplication          application entry point
+common/                     error handling, paging, filtering, geo, time
+docker-compose.yml          local PostGIS
+V1__extensions.sql          postgis, btree_gist, sequences
+PostgisContainerTest        Testcontainers base class
+ArchUnit rules              module boundaries, engine purity
+```
 
 ## Project structure
+
+The full package layout will be created in this phase, even though most folders stay empty until later:
 
 ```text
 dtc-bus-scheduling/
@@ -105,8 +136,7 @@ dtc-bus-scheduling/
   src/main/java/com/dtc/transit/
     TransitApplication.java
     common/       config, error, paging, filtering, geo, time, audit base
-    security/     SecurityConfig, TokenService, AuthController,
-                  DepotAccessEvaluator
+    security/     security config, token service, auth, depot access
     user/
     masterdata/   depot/ bus/ crew/ stop/
     route/        route/ pattern/ overlap/ coverage/ proposal/
@@ -114,9 +144,9 @@ dtc-bus-scheduling/
     scheduling/
       engine/     model/ vehicle/ relief/ duty/ assignment/
                   constraint/ search/     <- no Spring here
-      rules/      RuleSet entity and binding
-      run/        ScheduleRun, RunWorker, RunReaper, SSE
-      schedule/   Schedule, Block, Duty, Assignment, Conflict
+      rules/      rule set storage and binding
+      run/        run queue, worker, reaper, SSE
+      schedule/   schedule, block, duty, assignment, conflict
       api/
     reporting/
     audit/
@@ -125,225 +155,67 @@ dtc-bus-scheduling/
     db/migration/
   src/test/java/com/dtc/transit/
     architecture/  ArchUnit rules
-    support/       PostgisContainerTest, TestData builders, JwtTestTokens
+    support/       Testcontainers base, test data builders, test tokens
 ```
 
-The test tree mirrors the main tree.
+The test tree will mirror the main tree.
 
-## Key dependencies
+## Libraries to add
 
-```xml
-<properties>
-  <java.version>21</java.version>
-</properties>
+Core:
 
-<dependencies>
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-web</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-validation</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-data-jpa</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-security</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-actuator</artifactId>
-  </dependency>
-
-  <!-- Geospatial. Version managed by Spring Boot's Hibernate BOM. -->
-  <dependency>
-    <groupId>org.hibernate.orm</groupId>
-    <artifactId>hibernate-spatial</artifactId>
-  </dependency>
-  <!-- GeoJSON read and write. Align with the jts-core that
-       hibernate-spatial pulls in. -->
-  <dependency>
-    <groupId>org.locationtech.jts.io</groupId>
-    <artifactId>jts-io-common</artifactId>
-    <version>${jts.version}</version>
-  </dependency>
-
-  <dependency>
-    <groupId>org.postgresql</groupId>
-    <artifactId>postgresql</artifactId>
-    <scope>runtime</scope>
-  </dependency>
-  <dependency>
-    <groupId>org.flywaydb</groupId>
-    <artifactId>flyway-core</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>org.flywaydb</groupId>
-    <artifactId>flyway-database-postgresql</artifactId>
-  </dependency>
-
-  <dependency>
-    <groupId>org.mapstruct</groupId>
-    <artifactId>mapstruct</artifactId>
-    <version>${mapstruct.version}</version>
-  </dependency>
-  <dependency>
-    <groupId>org.springdoc</groupId>
-    <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-    <version>${springdoc.version}</version>
-  </dependency>
-  <dependency>
-    <groupId>com.github.ben-manes.caffeine</groupId>
-    <artifactId>caffeine</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>io.micrometer</groupId>
-    <artifactId>micrometer-registry-prometheus</artifactId>
-  </dependency>
-
-  <!-- Test -->
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-test</artifactId>
-    <scope>test</scope>
-  </dependency>
-  <dependency>
-    <groupId>org.springframework.security</groupId>
-    <artifactId>spring-security-test</artifactId>
-    <scope>test</scope>
-  </dependency>
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-testcontainers</artifactId>
-    <scope>test</scope>
-  </dependency>
-  <dependency>
-    <groupId>org.testcontainers</groupId>
-    <artifactId>postgresql</artifactId>
-    <scope>test</scope>
-  </dependency>
-  <dependency>
-    <groupId>org.testcontainers</groupId>
-    <artifactId>junit-jupiter</artifactId>
-    <scope>test</scope>
-  </dependency>
-  <dependency>
-    <groupId>net.jqwik</groupId>
-    <artifactId>jqwik</artifactId>
-    <version>${jqwik.version}</version>
-    <scope>test</scope>
-  </dependency>
-  <dependency>
-    <groupId>com.tngtech.archunit</groupId>
-    <artifactId>archunit-junit5</artifactId>
-    <version>${archunit.version}</version>
-    <scope>test</scope>
-  </dependency>
-</dependencies>
+```text
+spring-boot-starter-web
+spring-boot-starter-validation
+spring-boot-starter-data-jpa
+spring-boot-starter-security
+spring-boot-starter-oauth2-resource-server
+spring-boot-starter-actuator
 ```
 
-Pin every version property to the latest stable release compatible with the chosen Spring Boot version.
+Geospatial and persistence:
 
-## Local infrastructure
-
-```yaml
-services:
-  db:
-    image: postgis/postgis:16-3.4
-    environment:
-      POSTGRES_DB: dtc_transit
-      POSTGRES_USER: dtc
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-local_dev_only}
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dtc -d dtc_transit"]
-      interval: 5s
-      retries: 10
-volumes:
-  pgdata:
+```text
+hibernate-spatial          (version from the Spring Boot Hibernate BOM)
+jts-io-common              (GeoJSON read/write, aligned with jts-core)
+postgresql driver
+flyway-core
+flyway-database-postgresql
 ```
 
-## Base configuration
+Support:
 
-```yaml
-spring:
-  application:
-    name: dtc-transit
-  datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/dtc_transit}
-    username: ${DB_USER:dtc}
-    password: ${DB_PASSWORD:local_dev_only}
-    hikari:
-      maximum-pool-size: 20
-  jpa:
-    open-in-view: false
-    hibernate:
-      ddl-auto: validate
-    properties:
-      hibernate:
-        jdbc.time_zone: UTC
-        jdbc.batch_size: 500
-        order_inserts: true
-        order_updates: true
-  data:
-    web:
-      pageable:
-        default-page-size: 20
-        max-page-size: 100
-  threads:
-    virtual:
-      enabled: true
-  flyway:
-    enabled: true
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus
-  endpoint:
-    health:
-      probes:
-        enabled: true
+```text
+mapstruct
+springdoc-openapi-starter-webmvc-ui
+caffeine
+micrometer-registry-prometheus
 ```
 
-## Test base
+Test:
 
-```java
-@SpringBootTest
-@Testcontainers
-public abstract class PostgisContainerTest {
-
-    @Container
-    @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGIS = new PostgreSQLContainer<>(
-            DockerImageName.parse("postgis/postgis:16-3.4")
-                    .asCompatibleSubstituteFor("postgres"));
-}
+```text
+spring-boot-starter-test
+spring-security-test
+spring-boot-testcontainers
+testcontainers-postgresql
+testcontainers-junit-jupiter
+jqwik
+archunit-junit5
 ```
 
-## Expected result
+Every version will be pinned to the latest stable release compatible with the chosen Spring Boot version.
 
-A runnable application, `/actuator/health` returning UP, Swagger UI reachable, an empty migrated schema and a passing test suite.
-
-## Exit criteria
+## Before moving on
 
 ```text
 ./mvnw verify passes from a clean checkout, including one
 Testcontainers test.
 
-The app starts against docker compose up, and Flyway applies V1.
+The app starts against docker compose up, and Flyway applies
+the first migration.
+
+/actuator/health returns UP.
 
 The ArchUnit rule "engine has no Spring or JPA imports" exists
 and passes.
@@ -351,264 +223,152 @@ and passes.
 
 ---
 
-# Phase 1 — Security and RBAC
+# Phase 2 — Auth + JWT + RBAC
 
-## Goal
+## Objective
 
-Every endpoint is authenticated. Roles and depot scope are enforced. Tokens can actually be revoked, not just in theory.
+Phase 2 will add login, JWT tokens, the four roles and depot scoping, so that every endpoint built in later phases is protected from the moment it exists.
 
-Security comes second, before any domain data exists, because retrofitting depot scope onto finished endpoints is far harder than building with it.
+Security comes before any domain data, because retrofitting depot scope onto finished endpoints is far harder than building with it.
 
-## Tasks
+## Build order
 
-1. Migrations for `app_user`, `user_role`, `refresh_token` and `audit_log`, with `audit_log` partitioned.
-2. `UserService`: create, update roles and depot, enable and disable. Disabling increments `token_version`.
-3. `TokenService`: RS256 encoder and decoder through Nimbus, 15-minute access tokens, 7-day hashed refresh tokens with rotation and reuse detection.
-4. `AuthController` with login, refresh and logout.
-5. `SecurityConfig`: stateless, deny by default, JWT roles converter, CORS allow-list, security headers.
-6. `TokenVersionFilter`, rejecting tokens whose `tv` claim is behind the user's current version, with a 60-second cache.
-7. `DepotAccessEvaluator` and a `DepotScope` specification helper.
-8. Login rate limiting with Bucket4j, and account lockout.
-9. Audit event infrastructure: `AuditEvent` and a listener writing in the same transaction.
-10. Seed an admin user from an environment-provided bootstrap password, local profile only.
+1. Migrations for `app_user`, `user_role`, `refresh_token` and `audit_log`, with the audit log partitioned by month.
+2. Token service — RS256 keys, 15-minute access tokens, 7-day refresh tokens stored hashed, with rotation and reuse detection.
+3. Auth endpoints — login, refresh, logout.
+4. Security configuration — stateless, deny by default, JWT roles converter, CORS allow-list, security headers.
+5. Token-version filter, rejecting tokens whose version claim is behind the user's current version, with a 60-second cache.
+6. Depot access evaluator and the depot-scope helper that every later query will reuse.
+7. Login rate limiting and account lockout.
+8. Audit event infrastructure, writing the audit row in the same transaction as the change.
+9. Seed an admin user from an environment-provided bootstrap password, local profile only.
 
-## Key code
-
-```java
-@Configuration
-@EnableMethodSecurity
-class SecurityConfig {
-
-    @Bean
-    SecurityFilterChain api(HttpSecurity http,
-                            TokenVersionFilter tokenVersionFilter) throws Exception {
-        return http
-            .csrf(csrf -> csrf.disable())          // stateless bearer tokens
-            .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.POST,
-                        "/api/v1/auth/login", "/api/v1/auth/refresh").permitAll()
-                .requestMatchers("/actuator/health/**").permitAll()
-                .requestMatchers("/api/v1/users/**").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.POST,
-                        "/api/v1/schedules/*/publish").hasAnyRole("ADMIN", "MANAGER")
-                .requestMatchers(HttpMethod.POST,
-                        "/api/v1/routes/*/decision").hasAnyRole("ADMIN", "MANAGER")
-                .anyRequest().authenticated())
-            .oauth2ResourceServer(o -> o.jwt(
-                    jwt -> jwt.jwtAuthenticationConverter(rolesConverter())))
-            .addFilterAfter(tokenVersionFilter, BearerTokenAuthenticationFilter.class)
-            .build();
-    }
-
-    private JwtAuthenticationConverter rolesConverter() {
-        var authorities = new JwtGrantedAuthoritiesConverter();
-        authorities.setAuthoritiesClaimName("roles");
-        authorities.setAuthorityPrefix("ROLE_");
-        var converter = new JwtAuthenticationConverter();
-        converter.setJwtGrantedAuthoritiesConverter(authorities);
-        return converter;
-    }
-}
-```
-
-```java
-@Component("depotAccess")
-public class DepotAccessEvaluator {
-
-    /** HQ users have no depot claim and can access every depot.
-        Depot-bound users can access only their own. */
-    public boolean canAccess(Long depotId) {
-        var jwt = (Jwt) SecurityContextHolder.getContext()
-                .getAuthentication().getPrincipal();
-        Long userDepot = jwt.getClaim("depot");
-        return userDepot == null || userDepot.equals(depotId);
-    }
-}
-```
-
-Used on an application service:
-
-```java
-@PreAuthorize("hasAnyRole('ADMIN','MANAGER','SCHEDULER')"
-            + " and @depotAccess.canAccess(#cmd.depotId())")
-public ScheduleRunId startRun(StartRunCommand cmd) { ... }
-```
-
-## Tests
-
-Login success and failure, lockout after five failures, refresh rotation, and refresh reuse revoking the whole token family.
-
-A disabled user's token is rejected after the cache TTL.
-
-A parameterised test over the permission matrix. This test grows in every later phase, and a new unclassified endpoint makes it fail.
-
-## Exit criteria
+## Key components
 
 ```text
-Unauthenticated calls to any non-public endpoint       401
-Wrong role                                             403
-Out-of-depot access                                    404
+TokenService            issue, validate and rotate tokens
+AuthController          login, refresh, logout
+SecurityConfig          filter chain, deny by default
+TokenVersionFilter      revocation within the cache TTL
+DepotAccessEvaluator    single-entity depot check
+DepotScope              query-level depot restriction
+AuditListener           writes audit rows before commit
+```
+
+Roles:
+
+```text
+ADMIN
+MANAGER
+PLANNER
+SCHEDULER
+```
+
+## Do this early
+
+The permission matrix test will be written in this phase, even with only a handful of endpoints existing. Every later phase adds rows to it, and it fails loudly when someone adds an endpoint without classifying it.
+
+Building the matrix test at the end instead would mean reconstructing the intended rules from finished code, which is exactly when mistakes get baked in.
+
+## Before moving on
+
+```text
+No token on a non-public endpoint      401
+Wrong role                             403
+Another depot's data                   404
 
 JWTs are signed with RS256.
-alg=none and HS256 tokens are rejected, and this is tested.
+alg=none and HS256-confusion tokens are rejected, and this is
+tested.
+A disabled user's token is rejected after the cache TTL.
 Login and user administration are audited.
 ```
 
 ---
 
-# Phase 2 — Master Data, Pagination and Filtering
+# Phase 3 — Master Data + Pagination/Filtering
 
-## Goal
+## Objective
 
-CRUD for depots, buses, crew and stops, built on a reusable pagination, filtering and sorting framework that every later list endpoint uses.
+Phase 3 will add CRUD for depots, buses, crew and stops, together with one reusable pagination, filtering and sorting framework.
 
-The framework is the real deliverable here. Writing it once means the 22 paginated endpoints behave identically.
+The framework is the real deliverable. Around 22 endpoints will eventually use it, so writing it once means they all behave identically.
 
-## Tasks
+## Build order
 
 1. Migrations for `depot`, `bus`, `bus_unavailability`, `crew_member`, `crew_depot_history`, `crew_leave`, `crew_qualification` and `stop`, including GiST indexes.
-2. Entities with `@Version`, sequence ids using `allocationSize = 50`, and JTS `Point` columns.
-3. `common.paging`: `PageResponse`, `SortWhitelist`, `includeTotal` returning a `Slice`, and `CursorPage` for keyset pagination.
-4. `common.filtering`: filter records bound from query parameters, a specifications helper, and range and enum validation.
-5. `common.geo`: `GeoJsonCodec`, plus `bbox` and `near` parameter parsing and validation, including the service-area check and lon/lat order check.
-6. Normalisation: registration numbers upper-cased with spaces and dashes removed, employee codes kept as text so leading zeros survive.
-7. Depot and stop endpoints, bus and crew endpoints.
-8. CSV bulk import for buses and crew, with a per-row validation report, all-or-nothing per file, and `dryRun=true` support.
-9. Depot scope applied to every list and detail query.
+2. Build the paging and filtering framework **before any controller**.
+3. Entities with optimistic-locking versions, sequence IDs using a pooled allocator, and geometry point columns.
+4. Depot and stop endpoints first, since they are simplest, then bus and crew.
+5. Registration-number normalisation, with employee codes kept as text so leading zeros survive.
+6. CSV bulk import with a per-row validation report and a dry-run mode.
+7. Depot scope applied to every list and detail query.
 
-## Key code
-
-```java
-public record PageResponse<T>(List<T> content, int page, int size,
-                              Long totalElements, Integer totalPages,
-                              boolean hasNext, List<String> sort) {
-
-    public static <E, T> PageResponse<T> of(Page<E> p, Function<E, T> mapper) {
-        return new PageResponse<>(p.map(mapper).getContent(),
-                p.getNumber(), p.getSize(),
-                p.getTotalElements(), p.getTotalPages(),
-                p.hasNext(), sortOf(p.getSort()));
-    }
-
-    // includeTotal=false: no count query, so no totals
-    public static <E, T> PageResponse<T> of(Slice<E> s, Function<E, T> mapper) {
-        return new PageResponse<>(s.map(mapper).getContent(),
-                s.getNumber(), s.getSize(),
-                null, null, s.hasNext(), sortOf(s.getSort()));
-    }
-
-    private static List<String> sortOf(Sort sort) {
-        return sort.stream()
-                .map(o -> o.getProperty() + "," + o.getDirection().name().toLowerCase())
-                .toList();
-    }
-}
-```
-
-```java
-@Component
-public class SortWhitelist {
-
-    /** Rejects unknown sort fields, and always appends id
-        so that ordering is stable across pages. */
-    public Pageable check(Pageable pageable, Set<String> allowed) {
-        for (Sort.Order o : pageable.getSort()) {
-            if (!allowed.contains(o.getProperty())) {
-                throw new InvalidSortException(o.getProperty(), allowed);
-            }
-        }
-        Sort stable = pageable.getSort().and(Sort.by("id"));
-        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), stable);
-    }
-}
-```
-
-```java
-public record BusFilter(Long depotId, BusStatus status, FuelType fuelType,
-                        BusType busType, Boolean ac, String q) {}
-
-final class BusSpecifications {
-
-    static Specification<Bus> of(BusFilter f, DepotScope scope) {
-        return Specification.allOf(
-            scope.restrict("depot"),
-            eq("depot.id", f.depotId()),
-            eq("status", f.status()),
-            eq("fuelType", f.fuelType()),
-            eq("busType", f.busType()),
-            eq("ac", f.ac()),
-            f.q() == null ? null : (root, query, cb) -> cb.or(
-                cb.like(root.get("registrationNo"),
-                        "%" + RegistrationNo.normalise(f.q()) + "%"),
-                cb.like(cb.upper(root.get("fleetNo")),
-                        "%" + f.q().toUpperCase() + "%")));
-    }
-}
-```
-
-```java
-@RestController
-@RequestMapping("/api/v1/buses")
-class BusController {
-
-    private static final Set<String> SORTABLE =
-            Set.of("fleetNo", "registrationNo", "status", "depot.code");
-
-    @GetMapping
-    PageResponse<BusDto> list(BusFilter filter,
-                              @PageableDefault(sort = "fleetNo") Pageable pageable,
-                              @RequestParam(defaultValue = "true") boolean includeTotal) {
-        return busService.search(filter,
-                sortWhitelist.check(pageable, SORTABLE), includeTotal);
-    }
-}
-```
-
-Wildcards in the `q` parameter, meaning `%` and `_`, are escaped before the `LIKE` pattern is built. Filter values are always bound parameters and never concatenated into SQL.
-
-## Tests
-
-Pagination edge cases: a size above 100 is clamped, a negative page gives 400, a page beyond the end gives an empty result, an unknown sort field gives 400, and ordering stays stable when the sort values are duplicated.
-
-A depot-scoped scheduler cannot list or fetch another depot's buses, and gets 404.
-
-CSV import: duplicate registration numbers in different formats, leading-zero employee codes, UTF-8 Hindi names, and an unknown depot code.
-
-## Exit criteria
+## Key components
 
 ```text
-Depot, bus, crew and stop endpoints implemented, documented
-and authorization-tested.
+PageResponse      uniform list response shape
+SortWhitelist     rejects unknown sort fields, appends id tiebreaker
+CursorPage        keyset pagination for high-volume tables
+Filter records    typed query parameters per resource
+Specifications    filter records converted to JPA predicates
+GeoJsonCodec      geometry in and out
+CSV importer      dry run, per-row errors, all-or-nothing per file
+```
 
-The paging and filtering framework is reused by at least four
-list endpoints.
+## Why the framework comes first
+
+If the framework is written after two controllers exist, those two controllers get rewritten. Writing it first also forces the paging rules — max size 100, stable sort, whitelist — to be decided once rather than per endpoint.
+
+## Before moving on
+
+```text
+size above 100        clamped to 100
+page = -1             400
+page beyond the end   200 with empty content
+unknown sort field    400 listing allowed fields
+cross-depot access    404
 
 EXPLAIN ANALYZE shows index usage for filtered list queries on
 100k synthetic rows.
+
+The paging and filtering framework is reused by at least four
+list endpoints.
 ```
 
 ---
 
-# Phase 3 — Route Management and Geospatial
+# Phase 4 — Routes + Spatial + Overlap
 
-## Goal
+## Objective
 
-Routes stored as validated geometries, fast overlap detection between existing and proposed routes, coverage analysis, and a proposal workflow.
+Phase 4 will store routes as real map geometry, detect overlap between a proposed route and existing routes, and measure service coverage by zone.
 
-## Tasks
+This is the phase where PostGIS and Hibernate Spatial do actual work rather than just being configured.
 
-1. Migrations for `route`, `route_pattern` with generated `geom_utm` and `length_m` plus a GiST index, `pattern_stop`, `running_time_band`, `route_overlap`, `coverage_zone`, `grid_cell`, `service_area` and the `cell_coverage` materialized view.
-2. `RoutePattern` entity with a JTS `LineString` mapped through Hibernate Spatial.
-3. Geometry validation pipeline.
-4. Stop-to-line distance check, warning above 50 m, and `dist_from_start_m` computed with `ST_LineLocatePoint`.
-5. `OverlapAnalysisService` using the native query, adding shared stops, direction agreement and severity.
-6. `CoverageService`: grid-cell coverage view refresh, zone coverage query, and proposal coverage gain.
-7. Proposal state machine with guarded transitions. Submitting stores the analysis, and a decision requires MANAGER and a reason.
-8. Spatial filters `bbox` and `passesNear` on routes and stops.
-9. Recompute overlaps asynchronously when an active pattern changes.
+## Build order
 
-The validation pipeline runs in this order:
+1. Migrations for `route`, `route_pattern` with its generated projected column and GiST index, `pattern_stop`, `running_time_band`, `route_overlap`, `coverage_zone`, `grid_cell`, `service_area` and the cell-coverage materialized view.
+2. The geometry codec and validation pipeline.
+3. The route pattern entity with its geometry mapped through Hibernate Spatial.
+4. The overlap native query, returning an interface projection.
+5. Enrichment in Java — shared stops, direction agreement, severity.
+6. Coverage service — grid-cell view refresh, zone coverage query, proposal coverage gain.
+7. Proposal state machine with guarded transitions.
+8. Spatial filters on the route and stop list endpoints.
+9. Asynchronous overlap recomputation when an active pattern changes.
+
+## Key components
+
+```text
+RoutePattern            geometry entity (LineString)
+GeoJsonCodec            parse and serialise GeoJSON
+OverlapAnalysisService  native spatial query plus Java enrichment
+CoverageService         grid-cell coverage and gaps
+Proposal state machine  propose, review, approve, activate
+```
+
+The validation pipeline will run in this order:
 
 ```text
 parse GeoJSON
@@ -632,148 +392,58 @@ optional ST_SimplifyPreserveTopology
 vertex cap (e.g. 5,000)
 ```
 
-## Key code
+## Build test fixtures before the query
 
-```java
-@Entity
-@Table(name = "route_pattern")
-public class RoutePattern {
+Hand-drawn geometries with known answers will be created before the overlap SQL is written — a 1 km straight line, two identical routes, a parallel road 40 m away, a perpendicular crossing.
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "route_pattern_seq")
-    @SequenceGenerator(name = "route_pattern_seq",
-                       sequenceName = "route_pattern_seq", allocationSize = 50)
-    private Long id;
+Spatial bugs are invisible without known-answer fixtures. A query can return plausible-looking numbers that are completely wrong.
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    private Route route;
-
-    @Enumerated(EnumType.STRING)
-    private Direction direction;
-
-    @Column(columnDefinition = "geometry(LineString,4326)", nullable = false)
-    private LineString geom;
-
-    @Column(name = "length_m", insertable = false, updatable = false)
-    private Double lengthM;                  // generated in the database
-
-    @Version
-    private long version;
-}
-```
-
-```java
-public interface OverlapRow {
-    Long getPatternId();
-    String getRouteNo();
-    String getDirection();
-    double getOverlapM();
-    double getOverlapRatio();
-}
-
-public interface RoutePatternRepository extends JpaRepository<RoutePattern, Long> {
-
-    @Query(nativeQuery = true, value = """
-        WITH proposed AS (
-          SELECT ST_Transform(
-                   ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326), 32643) AS g
-        ),
-        candidates AS (
-          SELECT rp.id, rp.route_id, rp.direction, rp.geom_utm
-          FROM route_pattern rp, proposed p
-          WHERE ST_DWithin(rp.geom_utm, p.g, :bufferM)
-            AND rp.id <> COALESCE(:excludeId, -1)
-        ),
-        segments AS (
-          SELECT c.id AS pattern_id, c.route_id, c.direction, d.geom AS seg
-          FROM candidates c, proposed p,
-               LATERAL ST_Dump(ST_Intersection(p.g,
-                   ST_Buffer(c.geom_utm, :bufferM,
-                             'endcap=flat join=round'))) d
-        )
-        SELECT s.pattern_id AS patternId,
-               r.route_no   AS routeNo,
-               s.direction  AS direction,
-               SUM(ST_Length(s.seg)) AS overlapM,
-               SUM(ST_Length(s.seg))
-                 / (SELECT ST_Length(g) FROM proposed) AS overlapRatio
-        FROM segments s
-        JOIN route r ON r.id = s.route_id AND r.status = 'ACTIVE'
-        WHERE ST_Length(s.seg) >= :minSegmentM
-        GROUP BY s.pattern_id, r.route_no, s.direction
-        ORDER BY overlapM DESC
-        """)
-    List<OverlapRow> findOverlaps(@Param("geojson") String geojson,
-                                  @Param("bufferM") double bufferM,
-                                  @Param("minSegmentM") double minSegmentM,
-                                  @Param("excludeId") Long excludeId);
-}
-```
-
-A simple spatial filter goes through Hibernate Spatial rather than native SQL:
-
-```java
-@Query("select s from Stop s where s.active = true and st_within(s.location, :bbox) = true")
-Page<Stop> findInBbox(@Param("bbox") Polygon bbox, Pageable pageable);
-```
-
-## Tests
-
-These run against Testcontainers with hand-built geometries, so the expected numbers are known exactly:
+## Before moving on
 
 ```text
-Identical routes                        ratio ~ 1.00
-Parallel road 40 m away, 25 m buffer    ratio 0.00
-Crossing routes                         ratio 0.00 (segment < 200 m)
-3 km shared on a 10 km route            ratio 0.30 +/- 0.01
-```
+Identical routes                       ratio ~ 1.00
+Parallel road 40 m away, 25 m buffer   ratio 0.00
+Perpendicular crossing                 ratio 0.00
+3 km shared on a 10 km route           ratio 0.30 +/- 0.01
 
-Opposite direction on the same corridor is detected and labelled `same_direction = false`.
-
-A loop route where start equals end, and an out-and-back route, do not have their lengths double counted.
-
-Swapped lon/lat input is rejected with a helpful message, and an invalid geometry is rejected.
-
-Coverage: a zone entirely within 500 m of a stop gives 1.0, and a zone with no stops gives 0.
-
-Performance: an overlap query against 2,000 patterns completes under 500 ms at p95 with the GiST index, and the same query is run without the index for comparison.
-
-## Exit criteria
-
-```text
-Overlap analysis reproduces the expected values on the labelled
-fixture set.
-
+Swapped lon/lat input is rejected with a helpful message.
+Overlap analysis p95 stays under 500 ms.
 The proposal workflow is enforced, audited and
 authorization-tested.
-
-Route, stop and coverage endpoints are documented with GeoJSON
-examples.
 ```
 
 ---
 
-# Phase 4 — Timetables, Trips and Synthetic Data
+# Phase 5 — Timetables + Trips + Datasets
 
-## Goal
+## Objective
 
-Generate trips from headways, maintain deadhead times, and produce reproducible datasets for scheduling development and evaluation.
+Phase 5 will turn headways into actual trip times, maintain the deadhead travel-time matrix, and generate the reproducible S, M and L test datasets.
 
-Without datasets, nothing after this phase can be measured.
+This phase gates everything after it. Without datasets there is no way to test or measure Phases 6 to 11.
 
-## Tasks
+## Build order
 
 1. Migrations for `timetable`, `headway_band`, `trip`, `deadhead` and `calendar_exception`.
-2. `TripGenerator`: per direction, walk the headway bands from service start to end, looking up running time by departure band. A trip crossing a band boundary uses the band at departure.
-3. Validation: bands must not overlap, end must be after start, average speed must be plausible at roughly 8 to 45 km/h in urban operation, and duplicate trips are rejected.
-4. `DeadheadMatrix` holding measured values, or an estimate of straight-line distance times a detour factor of 1.3 divided by band speed, flagged as estimated.
+2. Trip generator — walk the headway bands per direction, looking up running time by departure band.
+3. Band validation — no overlapping bands, end after start, plausible average speed, no duplicate trips.
+4. Deadhead matrix, with an estimate fallback flagged as estimated rather than silently used as measured.
 5. Day-type resolution with calendar exceptions for holidays and special events.
-6. A timetable change marks dependent drafts and published schedules as needing revalidation.
-7. A synthetic data generator running under a `seed` profile as a CLI runner, with a fixed random seed.
-8. An optional GTFS static importer for stops, routes, shapes and trips, subject to the data source's licence terms.
-9. Timetable and trip endpoints, with the trips list using keyset pagination.
+6. Timetable changes mark dependent drafts and published schedules as needing revalidation.
+7. Synthetic data generator under a seed profile, as a CLI runner.
+8. Optional GTFS static importer, subject to the data source's licence terms.
+9. Timetable and trip endpoints, with the trip list using keyset pagination.
 
-The generator produces three datasets:
+## Key components
+
+```text
+TripGenerator     headway bands -> trips
+DeadheadMatrix    terminal-to-terminal travel times by band
+Calendar          day-type resolution with overrides
+Data generator    S, M and L datasets from a fixed seed
+```
+
+Dataset targets:
 
 ```text
 S   1 depot,   20 routes,  ~120 buses,  ~1,200 trips,   ~300 crew
@@ -781,31 +451,16 @@ M   10 depots,           ~1,200 buses, ~12,000 trips, ~3,000 crew
 L   45 depots,          5,000+ buses,  ~50,000 trips, ~12,000 crew
 ```
 
-All three carry realistic structure: morning and evening peaks, radial and ring routes, terminals as relief points, an electric-bus share, a leave rate and a licence-expiry distribution.
+All three will carry realistic structure: morning and evening peaks, radial and ring routes, terminals as relief points, an electric-bus share, a leave rate and a licence-expiry distribution. They will also contain deliberately infeasible pockets, so conflict detection is exercised rather than assumed.
 
-## Key code
-
-```java
-public List<TripDraft> generate(Timetable tt, RoutePattern pattern, Direction dir) {
-    var trips = new ArrayList<TripDraft>();
-    for (HeadwayBand band : tt.bands(dir)) {              // sorted, non-overlapping
-        for (int dep = band.fromSec(); dep < band.toSec(); dep += band.headwaySec()) {
-            int run = pattern.runningTimeAt(tt.dayType(), dep);   // band lookup by departure
-            trips.add(new TripDraft(pattern.id(), dep, dep + run, pattern.lengthM()));
-        }
-    }
-    return trips;
-}
-```
-
-## Exit criteria
+## Before moving on
 
 ```text
 Generated trip counts match the analytical count, the sum over
 bands of ceil(band length / headway).
 
-S, M and L datasets generate deterministically from the same
-seed, with a stable checksum.
+S, M and L regenerate deterministically from the same seed,
+with a stable checksum.
 
 A holiday override changes the timetable picked for that date,
 and this is tested.
@@ -813,490 +468,307 @@ and this is tested.
 
 ---
 
-# Phase 5 — Vehicle Scheduling and Run Infrastructure
+# Phase 6 — Vehicle Scheduling
 
-## Goal
+## Objective
 
-Turn a depot-day's trips into blocks, assign buses, and run the whole thing through the asynchronous job pipeline.
+Phase 6 will chain a depot-day's trips onto buses to form blocks, assign physical buses to those blocks, and run the whole thing as an asynchronous background job.
 
-## Tasks
+This is where the scheduling engine begins, and it will be written as plain Java with no Spring or JPA dependencies.
 
-1. Engine model as pure Java records: `TripView`, `DepotContext`, `VehicleClass`, `Block`, `BlockEvent`, `VehicleSchedule`.
-2. `GreedyBestFitBlockBuilder`, handling minimum layover, deadhead, vehicle class, EV range with reserve, mid-day depot returns and charging events.
-3. `MinFleetMatchingBlockBuilder` using Hopcroft-Karp, available as an alternative builder and as the PVR lower bound.
-4. `BusAssigner`, mapping blocks to physical buses of the right class, honouring unavailability and preferring an even distribution of kilometres.
-5. Migrations for `rule_set` in basic form, `schedule_run`, `schedule`, `vehicle_block`, `block_event`, `bus_assignment` with its exclusion constraint, `conflict`, and the partial unique indexes.
-6. `ScheduleSnapshotLoader`, read-only at `REPEATABLE READ`, and `SchedulePersister` using JDBC batch writes.
-7. The run queue: `ScheduleRunService.create` with an idempotency key, `RunWorker` claiming with `SKIP LOCKED`, a heartbeat, and `RunReaper`.
+## Build order
+
+1. Engine model as plain Java records — trip view, depot context, vehicle class, block, block event, vehicle schedule.
+2. The greedy best-fit block builder, handling minimum layover, deadhead, vehicle class, EV range with reserve, mid-day depot returns and charging events.
+3. The bus assigner, honouring unavailability windows and preferring an even distribution of kilometres.
+4. Migrations for the basic rule set, `schedule_run`, `schedule`, `vehicle_block`, `block_event`, `bus_assignment` with its exclusion constraint, `conflict`, and the partial unique indexes.
+5. Snapshot loader (read-only, repeatable read) and the batch persister.
+6. The run queue — create with an idempotency key, worker claiming with `SKIP LOCKED`, heartbeat, and the reaper for lost workers.
+7. The minimum-fleet matching builder last, since it is the lower bound rather than the default.
 8. Run and schedule endpoints.
 
-## Key code
-
-```java
-public final class GreedyBestFitBlockBuilder implements BlockBuilder {
-
-    @Override
-    public VehicleSchedule build(List<TripView> trips, DepotContext ctx, RuleSet rules) {
-        List<TripView> ordered = trips.stream()
-                .sorted(Comparator.comparingInt(TripView::startSec)
-                                  .thenComparingLong(TripView::id))
-                .toList();
-
-        List<BlockDraft> blocks = new ArrayList<>();
-        List<Uncovered> uncovered = new ArrayList<>();
-
-        for (TripView trip : ordered) {
-            BlockDraft best = null;
-            int bestSlack = Integer.MAX_VALUE;
-
-            for (BlockDraft b : blocks) {
-                if (!b.vehicleClass().satisfies(trip.requiredClass())) continue;
-                int readyAt = b.endSec()
-                        + rules.minLayoverSec(b.lastTrip())
-                        + ctx.deadheadSec(b.endStopId(), trip.startStopId(), b.endSec());
-                int slack = trip.startSec() - readyAt;
-                // canAppend checks EV range and maximum block length
-                if (slack >= 0 && slack < bestSlack && b.canAppend(trip, ctx, rules)) {
-                    best = b;
-                    bestSlack = slack;
-                }
-            }
-
-            if (best != null) {
-                // inserts DEPOT_PARK and CHARGING events when the slack is large
-                best.append(trip, ctx, rules);
-            } else if (ctx.fleet().hasCapacity(trip.requiredClass(), blocks)) {
-                blocks.add(BlockDraft.pullOutFor(trip, ctx, rules));
-            } else {
-                uncovered.add(new Uncovered(trip, ConflictType.UNCOVERED_TRIP,
-                        "No available vehicle of class " + trip.requiredClass()));
-            }
-        }
-        return VehicleSchedule.of(
-                blocks.stream().map(b -> b.close(ctx, rules)).toList(), uncovered);
-    }
-}
-```
-
-Claiming a queued run from any instance without double processing:
-
-```java
-@Query(nativeQuery = true, value = """
-    UPDATE schedule_run
-    SET status = 'RUNNING', claimed_by = :worker,
-        heartbeat_at = now(), started_at = now()
-    WHERE id = (
-        SELECT id FROM schedule_run
-        WHERE status = 'QUEUED'
-        ORDER BY created_at
-        FOR UPDATE SKIP LOCKED
-        LIMIT 1)
-    RETURNING id
-    """)
-Optional<UUID> claimNext(@Param("worker") String workerId);
-```
-
-## Tests
-
-Property-based tests assert that for any generated trip set, every trip appears in exactly one block or in the uncovered list, that consecutive trips within a block satisfy layover plus deadhead, and that EV blocks never exceed usable range.
-
-The greedy PVR is compared with the matching lower bound on the S dataset and the gap is recorded.
-
-A second run for the same depot and date, while one is queued or running, returns 409.
-
-Killing a worker mid-run leads the reaper to mark the run failed, with no partial schedule rows left behind.
-
-## Exit criteria
+## Key components
 
 ```text
-The S dataset produces blocks with 100% trip coverage, or
-explained uncovered trips, in under 5 s.
+GreedyBestFitBlockBuilder      default block builder
+MinFleetMatchingBlockBuilder   optional builder and PVR lower bound
+BusAssigner                    blocks -> physical buses
+ScheduleSnapshotLoader         one consistent read of all inputs
+SchedulePersister              batched writes in one transaction
+RunWorker / RunReaper          job queue and crash recovery
+```
 
-The asynchronous run lifecycle works end to end through the API.
+The algorithms themselves are specified in the architecture document. This phase implements them.
+
+## Watch out
+
+The matching builder is tempting to build first because it is optimal. It is not the default, and building it first delays a working pipeline. Greedy first, matching second.
+
+## Before moving on
+
+```text
+The S dataset gets 100% trip coverage, or every uncovered trip
+carries a reason, in under 5 seconds.
+
+Every trip appears in exactly one block or in the uncovered list.
+Consecutive trips within a block satisfy layover plus deadhead.
+EV blocks never exceed usable range.
+
+A second run for the same depot and date, while one is queued or
+running, returns 409.
+
+Killing a worker mid-run leads the reaper to mark it failed, with
+no partial schedule rows left behind.
 ```
 
 ---
 
-# Phase 6 — Constraint Engine and Linked Duties
+# Phase 7 — Rest Rules + Linked Duties
 
-## Goal
+## Objective
 
-A configurable constraint engine, and a linked duty builder that produces legal duties where the crew stays with one bus.
+Phase 7 will add the labour rules as configurable data, then cut each bus block into legal crew duties in which the crew stays with one bus.
 
-## Tasks
+A bus block can run 17 hours, but a person cannot. This phase is what turns bus work into human work.
 
-1. A typed `RuleSet` record with Bean Validation, stored as JSONB and resolved by effective date and depot, plus its endpoints.
-2. The `Constraint<T>` interface and its catalogue: `MaxWorkPerDuty`, `MaxContinuousWork`, `MinBreak`, `MaxSpreadOver`, `MinPaidDuty` as soft, and the rest.
-3. An incremental evaluation API, `DutyAccumulator`, for fast feasibility checks during construction.
-4. `ReliefOpportunityFinder`.
-5. `LinkedDutyBuilder`, including split linked duties around mid-day depot parking.
-6. Duty metrics: sign-on and sign-off, platform, paid, breaks, spread-over and overtime, plus duty type classification.
+## Build order
+
+1. The typed rule-set record with validation, stored as JSONB and resolved by effective date and depot, plus its endpoints.
+2. The constraint interface, then one constraint at a time, each with its own unit test before the next is added.
+3. The incremental evaluation helper for fast feasibility checks during construction.
+4. The relief opportunity finder.
+5. The linked duty builder, including split linked duties around mid-day depot parking.
+6. Duty metrics — sign-on and sign-off, platform, paid, breaks, spread-over, overtime — and duty type classification.
 7. Handover records at cut points.
 8. Migrations for `piece_of_work`, `duty`, `duty_piece` and `handover`.
 9. Duty, handover and validation endpoints.
 
-## Key code
-
-```java
-public interface Constraint<T> {
-    String code();
-    Severity severity();
-    List<Violation> check(T subject, ValidationContext ctx);
-}
-
-public final class MaxContinuousWork implements Constraint<DutyView> {
-
-    @Override public String code()       { return "CONTINUOUS_WORK_EXCEEDED"; }
-    @Override public Severity severity() { return Severity.HARD; }
-
-    @Override
-    public List<Violation> check(DutyView duty, ValidationContext ctx) {
-        int limit = ctx.rules().maxContinuousWorkMin() * 60;
-        int minBreak = ctx.rules().minBreakMin() * 60;
-        int continuous = 0;
-
-        for (DutySegment seg : duty.segments()) {    // WORK and GAP, in time order
-            if (seg.isWork()) {
-                continuous += seg.durationSec();
-                if (continuous > limit) {
-                    return List.of(Violation.hard(code(), duty.ref(),
-                        "Continuous work %d min exceeds %d min without a %d-min break at %s"
-                            .formatted(continuous / 60, limit / 60,
-                                       minBreak / 60, seg.startLabel())));
-                }
-            } else if (seg.durationSec() >= minBreak) {
-                continuous = 0;       // only a qualifying break resets the counter
-            }
-        }
-        return List.of();
-    }
-}
-```
-
-```java
-public final class LinkedDutyBuilder implements DutyBuilder {
-
-    @Override
-    public CrewSchedule build(VehicleSchedule vs, DepotContext ctx, RuleSet rules) {
-        var duties = new ArrayList<DutyDraft>();
-        var violations = new ArrayList<Violation>();
-
-        for (Block block : vs.blocks()) {
-            List<ReliefOpportunity> reliefs = reliefFinder.find(block, ctx, rules);
-            int cursor = 0;
-
-            while (cursor < reliefs.size() - 1) {
-                OptionalInt cut = bestCut(block, reliefs, cursor, rules);
-
-                if (cut.isEmpty()) {
-                    int next = cursor + 1;
-                    DutyDraft infeasible = DutyDraft.linked(
-                            block, reliefs.get(cursor), reliefs.get(next), rules);
-                    duties.add(infeasible);
-                    violations.add(Violation.hard("NO_FEASIBLE_RELIEF", infeasible.ref(),
-                            "No legal relief between " + reliefs.get(cursor).label()
-                                    + " and " + reliefs.get(next).label()));
-                    cursor = next;
-                } else {
-                    duties.add(DutyDraft.linked(block, reliefs.get(cursor),
-                                                reliefs.get(cut.getAsInt()), rules));
-                    cursor = cut.getAsInt();
-                }
-            }
-        }
-        return CrewSchedule.of(duties, handoversFrom(duties), violations);
-    }
-
-    /** Checks every later relief, because the constraints are not monotone,
-        and picks the cut closest to target work, penalising a remainder
-        shorter than the minimum paid duty. */
-    private OptionalInt bestCut(Block block, List<ReliefOpportunity> reliefs,
-                                int from, RuleSet rules) { ... }
-}
-```
-
-## Tests
-
-Unit tests per constraint, including boundaries. Exactly at the limit passes, and one second over fails.
-
-A 17-hour block produces two or three duties, each legal, with handovers at relief points.
-
-A block containing a 6-hour stretch with no relief point produces a `NO_FEASIBLE_RELIEF` conflict and is not silently accepted.
-
-Changing `maxContinuousWorkMin` in the rule set changes the output with no code change. This is the test that proves rules really are data.
-
-## Exit criteria
+## Key components
 
 ```text
-The S dataset in linked mode produces duties with zero hard
-violations, apart from explained NO_FEASIBLE_RELIEF conflicts.
+RuleSet                  labour rules as versioned data
+Constraint catalogue     max work, continuous work, break,
+                         spread-over, minimum paid duty
+ReliefOpportunityFinder  where a bus can change crew
+LinkedDutyBuilder        block -> duties on the same bus
+```
+
+Rules covered in this phase are the ones **inside** a duty. Rest between consecutive duties and weekly rest are enforced in Phase 9, during crew assignment.
+
+## Watch out
+
+Hard constraints are **not monotone** in segment length. A longer segment can be legal when a shorter one was not, because a qualifying break appears later in the block.
+
+Every candidate cut point must therefore be checked. Stopping at the first failure will produce wrong results that look reasonable.
+
+## Before moving on
+
+```text
+A 17-hour block splits into 2-3 duties, each legal, with
+handovers at relief points.
+
+A block containing a 6-hour stretch with no relief point produces
+a NO_FEASIBLE_RELIEF conflict rather than being silently accepted.
+
+Changing the maximum continuous work value in the rule set changes
+the output with no code change.
+
+Constraint boundaries behave correctly: exactly at the limit
+passes, one second over fails.
 
 Duty metrics match hand-computed fixtures.
 ```
 
 ---
 
-# Phase 7 — Unlinked Duties and Handovers
+# Phase 8 — Unlinked Duties + Handovers
 
-## Goal
+## Objective
 
-Combine pieces of work across buses into efficient legal duties with feasible handovers, then improve them with local search.
+Phase 8 will let a crew move between buses at relief points, so that short pieces of work from different buses combine into full-length duties.
 
-## Tasks
+This is the phase that produces the efficiency gain over linked scheduling, and it is also the phase most likely to produce subtly illegal schedules if rushed.
 
-1. `PieceCutter`, using dynamic programming per block over relief opportunities, with piece length constrained between the minimum piece and the maximum continuous work.
-2. Relief-point transfer times, whether walking or staff shuttle, plus depot sign-on and sign-off travel.
-3. `UnlinkedDutyBuilder` greedy construction.
+## Build order
+
+1. The piece cutter, using dynamic programming per block over relief opportunities.
+2. Relief-point transfer times, plus depot sign-on and sign-off travel.
+3. The unlinked duty builder — greedy construction only at first.
 4. The handover feasibility constraint, plus maximum pieces and maximum bus changeovers as soft constraints.
-5. `LocalSearchImprover` with its five moves, a seeded RNG, a time budget, and a cost function whose weights come from the rule set.
-6. Determinism: stable ordering, the seed persisted on the run, and the output hash included in run metrics.
-7. Run progress events carrying phase, iteration and best cost, streamed over SSE.
+5. The local search improver, adding one move at a time and verifying each before adding the next.
+6. Determinism — stable ordering, the seed persisted on the run, output hash in the run metrics.
+7. Run progress events streamed over SSE.
 
-## Key code
-
-```java
-public final class LocalSearchImprover {
-
-    public CrewSchedule improve(CrewSchedule start, SearchContext ctx) {
-        var rng = new SplittableRandom(ctx.seed());
-        var current = start.mutableCopy();
-        double currentCost = ctx.cost().of(current);
-        int sinceImprovement = 0;
-        long deadline = ctx.clock().millis() + ctx.timeBudgetMs();
-
-        while (ctx.clock().millis() < deadline
-                && sinceImprovement < ctx.maxNonImproving()) {
-
-            Move move = ctx.moves().pick(rng).propose(current, rng);
-            if (move == null || !move.isHardFeasible(current, ctx.constraints())) {
-                sinceImprovement++;
-                continue;
-            }
-
-            // incremental: touches only the affected duties
-            double delta = move.costDelta(current, ctx.cost());
-            if (delta < 0) {
-                move.apply(current);
-                currentCost += delta;
-                sinceImprovement = 0;
-                ctx.progress().report(currentCost);
-            } else {
-                sinceImprovement++;
-            }
-        }
-        return current.freeze();
-    }
-}
-```
-
-## Tests
-
-Property-based tests assert that every piece belongs to exactly one duty, that every duty passes all hard constraints, that each handover gap is at least transfer plus buffer, and that the union of pieces equals the union of block work, so nothing is lost or duplicated.
-
-Determinism is checked by running the same input and seed ten times and comparing output hashes.
-
-Comparison: on the S and M datasets, unlinked mode needs fewer duties and less paid idle time than linked mode, and the numbers go into the evaluation report.
-
-Local search never increases cost and never introduces a hard violation.
-
-## Exit criteria
+## Key components
 
 ```text
+PieceCutter            block -> pieces of work
+UnlinkedDutyBuilder    pieces across buses -> duties
+Handover constraint    gap >= transfer time + buffer
+LocalSearchImprover    MovePiece, SwapPieces, MergeDuties,
+                       SplitDuty, ReCut
+```
+
+## Get correctness before optimisation
+
+The greedy construction will be made legal and complete before any local search is added.
+
+A legal greedy schedule is usable. A faster, cheaper schedule that violates a rest rule is not, and the violation may not be obvious in the output.
+
+## Before moving on
+
+```text
+Every piece belongs to exactly one duty, and the union of pieces
+equals the union of block work.
+
+Every duty passes all hard constraints.
+Every handover gap is at least transfer time plus buffer.
+
+Local search never increases cost and never introduces a hard
+violation.
+
+Same input and same seed produce an identical output hash across
+10 runs.
+
 The M dataset in unlinked mode completes per depot in under 60 s,
 including a 30 s search budget.
-
-Handovers are listed through the handovers endpoint with relief
-point and times.
 ```
 
 ---
 
-# Phase 8 — Crew Assignment, Conflicts, Overrides and Publish
+# Phase 9 — Crew Assignment + Conflicts + Publish
 
-## Goal
+## Objective
 
-Assign duties to named crew legally and fairly, explain what cannot be staffed, allow safe manual overrides, and publish atomically.
+Phase 9 will assign duties to named crew members legally and fairly, explain whatever cannot be staffed, allow safe manual overrides, and publish the final schedule atomically.
 
-## Tasks
+This is the phase where double-booking protection becomes real, enforced by the database rather than only by application code.
 
-1. Migration for `duty_assignment` with the exclusion constraint on published rows.
-2. `CrewHistoryLoader`, loading rolling 7-day actual and planned assignments, plus 28 days for fairness.
-3. `EligibilityFilter` with reason codes, `FairnessScorer`, `MrvCrewAssigner` and the standby pool.
-4. Conflict persistence with aggregated rejection reasons.
-5. `ValidationService`, performing a full re-check of the whole schedule and producing `VALIDATED` only when there are zero hard conflicts.
-6. Manual override through `PATCH /duty-assignments/{id}` with `If-Match`: re-validate the affected crew's window, reject hard violations outright, allow a soft override only for MANAGER or ADMIN with a reason, and audit it.
-7. `PublishService`: idempotent, in one transaction, superseding the old version, publishing the new one and flipping assignment status, relying on the database constraints as the final guard.
-8. `RevalidationJob`, re-checking future published schedules when a bus goes to maintenance or breakdown, leave is approved or a licence expires.
+## Build order
+
+1. Migration for `duty_assignment` **including the exclusion constraint** — not added later.
+2. Crew history loader — rolling 7 days for limits, 28 days for fairness.
+3. Eligibility filter with reason codes, then the fairness scorer, then the MRV assigner.
+4. Conflict persistence with the aggregated rejection histogram.
+5. Validation service, producing a validated state only when there are zero hard conflicts.
+6. Manual override with `If-Match`, re-validating the affected crew window.
+7. Publish service — lock the schedule row, supersede the old version, publish the new one, all in one transaction.
+8. Revalidation job for master-data changes affecting published schedules.
 9. Crew duty history, override, conflict and publish endpoints.
 
-## Key code
-
-```java
-public final class MrvCrewAssigner implements CrewAssigner {
-
-    @Override
-    public Roster assign(CrewSchedule cs, CrewPool pool,
-                         CrewHistory history, RuleSet rules) {
-        var ctx = new AssignmentContext(pool, history, rules);
-        var slots = new ArrayList<>(cs.duties().stream()
-                .flatMap(d -> d.requiredRoles().stream().map(role -> new Slot(d, role)))
-                .toList());
-
-        int booked = 0;
-        while (!slots.isEmpty()) {
-            if (booked % 50 == 0) {           // refresh the MRV ordering periodically
-                slots.sort(Comparator.comparingInt(ctx::eligibleCount)
-                        .thenComparingInt(s -> s.duty().signOnSec())
-                        .thenComparing(s -> s.duty().ref()));
-            }
-            Slot slot = slots.removeFirst();
-
-            // candidates plus a rejection reason histogram
-            Eligibility e = ctx.evaluate(slot);
-            e.candidates().stream()
-                .min(Comparator.comparingDouble(
-                            (CrewMember c) -> fairness.score(c, slot, ctx))
-                        .thenComparing(CrewMember::employeeCode))
-                .ifPresentOrElse(
-                        crew -> ctx.book(crew, slot),
-                        () -> ctx.unassigned(slot, e.rejectionHistogram()));
-            booked++;
-        }
-        return ctx.toRoster();
-    }
-}
-```
-
-```java
-@Transactional
-@PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
-public PublishResult publish(long scheduleId, String idempotencyKey) {
-    Schedule s = schedules.lockById(scheduleId);              // SELECT ... FOR UPDATE
-
-    if (s.isPublished()) return PublishResult.alreadyPublished(s);   // idempotent
-    if (!depotAccess.canAccess(s.depotId())) throw new NotFoundException();
-    if (conflicts.countOpenHard(scheduleId) > 0)
-        throw new PublishBlockedException(scheduleId);
-
-    schedules.findPublished(s.depotId(), s.serviceDate()).ifPresent(old -> {
-        assignments.setScheduleStatus(old.id(), "SUPERSEDED");
-        old.supersede();
-    });
-
-    // the exclusion constraints fire here
-    assignments.setScheduleStatus(s.id(), "PUBLISHED");
-    s.publish(currentUser(), clock.instant());
-    events.publish(new SchedulePublished(s.id()));            // audit + dashboard refresh
-    return PublishResult.published(s);
-}
-```
-
-An exclusion violation raised by PostgreSQL, SQLSTATE `23P01`, is translated into 409 Conflict naming the conflicting crew member or bus and the overlapping time range.
-
-## Tests
-
-An eligibility table test for every reason code.
-
-Rest across midnight: a duty ending at 01:30 followed by one starting at 09:00 the same calendar day violates a 10-hour minimum rest.
-
-Weekly limits using history from the previous week.
-
-Two schedulers overriding the same assignment concurrently: one succeeds and the other gets 412 or 409.
-
-Publishing with open hard conflicts returns 422. Publishing twice with the same key returns the same result.
-
-Forcing an overlapping published assignment through raw SQL is rejected by the exclusion constraint, which proves the guard actually exists rather than being assumed.
-
-Revalidation: marking a bus as broken down creates a `BUS_UNAVAILABLE` conflict on the published schedule.
-
-## Exit criteria
+## Key components
 
 ```text
-The L dataset, 5,000+ buses, is scheduled across all depots with
-published schedules containing zero hard violations.
+EligibilityFilter    hard rules with reason codes
+FairnessScorer       hours, night duties, pair continuity
+MrvCrewAssigner      hardest slot first
+ValidationService    full re-check before publish
+PublishService       atomic, idempotent version switch
+RevalidationJob      reacts to master-data changes
+```
+
+Hard eligibility will cover depot, role, active status, leave, weekly off, licence validity, qualifications, rest since the previous duty, weekly work limit and weekly rest.
+
+## Test the database guard directly
+
+An overlapping published assignment will be inserted with raw SQL, bypassing the application entirely.
+
+If it succeeds, the exclusion constraint is wrong — and that would never be discovered through the API, because the application checks would mask it.
+
+## Before moving on
+
+```text
+The L dataset, 5,000+ buses, publishes across all depots with
+zero hard violations.
 
 Every unassigned duty carries a reason histogram.
 
-The override and publish flows are fully audited.
+Publishing with open hard conflicts returns 422.
+Publishing twice with the same idempotency key returns the same
+result and creates one version.
+
+A raw-SQL overlapping published assignment is rejected by the
+exclusion constraint.
+
+Two schedulers overriding the same assignment concurrently: one
+succeeds, the other gets 412 or 409.
+
+Override and publish flows are fully audited.
 ```
 
 ---
 
-# Phase 9 — Reporting, Dashboard and Audit
+# Phase 10 — Reports + Dashboard + Audit
 
-## Goal
+## Objective
 
-Managers and schedulers get timely KPIs and an operations snapshot. Auditors get a queryable trail.
+Phase 10 will build the KPI reports, the live operations view for the current day, and a searchable audit trail.
 
-## Tasks
+It reads what Phase 9 publishes. Nothing in this phase changes a schedule.
 
-1. Materialized views `mv_fleet_utilization_daily`, `mv_crew_hours_weekly` and `mv_schedule_kpis`, refreshed on publish with a debounce, and nightly.
-2. Report endpoints with filters, pagination and streamed CSV export through `Accept: text/csv`.
-3. The today dashboard: buses out now, unassigned blocks, unassigned duties, open conflicts by type, and unavailable buses. It reads live tables with a 30-second cache.
-4. SSE for run progress, and optionally a dashboard push on publish or conflict events.
-5. The audit log endpoint with keyset pagination and filters on actor, entity, action and time range.
-6. PII masking by role in crew responses, partially masking phone, address and licence number for non-managers.
+## Build order
 
-## Key SQL
+1. Materialized views for fleet utilization, crew hours and schedule KPIs, each with the unique index that concurrent refresh requires.
+2. Report endpoints with filters, pagination and streamed CSV export.
+3. The today dashboard, reading live tables with a short cache.
+4. SSE for run progress, and optionally a dashboard push on publish.
+5. The audit log endpoint with keyset pagination and filters.
+6. PII masking by role in crew responses.
 
-```sql
-CREATE MATERIALIZED VIEW mv_fleet_utilization_daily AS
-SELECT s.depot_id,
-       s.service_date,
-       COUNT(DISTINCT vb.id)                                        AS blocks,
-       SUM(vb.service_km)                                           AS service_km,
-       SUM(vb.dead_km)                                              AS dead_km,
-       SUM(vb.dead_km) / NULLIF(SUM(vb.service_km + vb.dead_km), 0) AS dead_km_ratio,
-       SUM(e.trip_sec)::numeric
-         / NULLIF(SUM(vb.pull_in_sec - vb.pull_out_sec), 0)         AS in_service_ratio
-FROM schedule s
-JOIN vehicle_block vb ON vb.schedule_id = s.id
-JOIN LATERAL (
-     SELECT COALESCE(SUM(be.end_sec - be.start_sec), 0) AS trip_sec
-     FROM block_event be
-     WHERE be.block_id = vb.id AND be.type = 'TRIP') e ON true
-WHERE s.status = 'PUBLISHED'
-GROUP BY s.depot_id, s.service_date;
-
--- required for REFRESH MATERIALIZED VIEW CONCURRENTLY
-CREATE UNIQUE INDEX ON mv_fleet_utilization_daily (depot_id, service_date);
-```
-
-Peak vehicle requirement, meaning peak concurrent blocks, is computed in Java from block intervals with a sweep line, or in SQL using `generate_series` over 5-minute buckets.
-
-## Exit criteria
+## Key components
 
 ```text
-Report figures match an independent computation from the raw
-tables on the S dataset, and this is tested.
+mv_fleet_utilization_daily   PVR, in-service ratio, dead-km ratio
+mv_crew_hours_weekly         hours, overtime, night duties
+mv_schedule_kpis             duties, platform-to-paid, splits
+/dashboard/today             live operations snapshot
+/audit-logs                  keyset-paginated audit trail
+```
 
-Reports include published schedules only, with superseded
-versions excluded.
+## Watch out
 
-The audit completeness test passes: every write endpoint
-produces exactly one audit record.
+Reports must aggregate published schedules only. Including superseded versions would double count every republished day.
+
+Grouping must be by service date, not calendar date, or duties after midnight land in the wrong day.
+
+## Before moving on
+
+```text
+Report figures match an independent hand-written query on the
+S dataset.
+
+Only published schedules are included; superseded versions are
+excluded.
+
+Every write endpoint produces exactly one audit record.
+
+A depot with no blocks returns null ratios rather than an error.
 ```
 
 ---
 
-# Phase 10 — Hardening and Deployment
+# Phase 11 — Final Testing + Docker + Monitoring
 
-## Goal
+## Objective
 
-Production-ready performance, security, observability and packaging.
+Phase 11 will load-test the system, run security scans, add metrics and dashboards, and package the application for deployment.
 
-## Performance tasks
+Nothing new is built here. This phase proves that what was built is fast enough, secure enough and deployable.
 
-1. Run k6 or Gatling load tests using the scenario mix defined in the evaluation document.
-2. Review `EXPLAIN (ANALYZE, BUFFERS)` output for the top 20 queries, add or adjust indexes, and check for N+1 problems using Hibernate statistics.
-3. Size the HikariCP pool and the bounded engine executor.
-4. Run the full-fleet scheduling benchmark on the L dataset with parallel depot runs.
+## Build order — performance
 
-## Security tasks
+1. Load tests using the documented request mix.
+2. Review query plans for the top 20 queries, then add or adjust indexes.
+3. Check for N+1 queries using Hibernate statistics.
+4. Size the connection pool and the bounded engine executor.
+5. Run the full-fleet scheduling benchmark on the L dataset with parallel depot runs.
 
-1. Add OWASP Dependency-Check or equivalent to the build, and run an OWASP ZAP API scan against the OpenAPI spec.
-2. Verify security headers, CORS configuration and actuator exposure. Scan the tree for secrets.
-3. Set up least-privilege database roles.
+## Build order — security
+
+1. Dependency vulnerability scan in the build.
+2. API scan driven by the OpenAPI spec, authenticated.
+3. Verify security headers, CORS and actuator exposure. Scan the tree for secrets.
+4. Set up least-privilege database roles.
 
 ```text
 app_rw     DML only
@@ -1304,11 +776,11 @@ migrator   DDL, used by Flyway
            UPDATE and DELETE revoked on audit_log
 ```
 
-## Observability tasks
+## Build order — monitoring
 
 1. Add custom metrics.
-2. Build a Grafana dashboard with alerts for run failures, p95 latency, database pool saturation and stuck runs.
-3. Emit JSON logs carrying `traceId`, `userId` and `depotId`.
+2. Build a dashboard with alerts for run failures, p95 latency, pool saturation and stuck runs.
+3. Emit JSON logs carrying trace id, user id and depot id.
 
 ```text
 scheduling.run.duration{mode}
@@ -1318,48 +790,47 @@ route.overlap.duration
 api.page.size
 ```
 
-## Packaging and operations tasks
+## Build order — packaging and operations
 
-1. Write a multi-stage Dockerfile using a layered jar, a non-root user and JRE 21.
-2. Write production compose files or Kubernetes manifests with liveness and readiness probes and resource limits.
-3. Document the backup and restore procedure, base backup plus WAL, and run a restore rehearsal.
-4. Write the runbook covering a stuck run, a blocked publish, a revalidation storm, key rotation and restore.
+1. Multi-stage Dockerfile using a layered jar, a non-root user and a JRE 21 base image.
+2. Production compose files or Kubernetes manifests with liveness and readiness probes and resource limits.
+3. Backup and restore procedure, base backup plus WAL, with a restore rehearsal.
+4. Runbook covering a stuck run, a blocked publish, a revalidation storm, key rotation and restore.
 
-## Dockerfile
+## Where Docker appears
 
-```dockerfile
-FROM eclipse-temurin:21-jdk AS build
-WORKDIR /app
-COPY . .
-RUN ./mvnw -q -DskipTests package \
- && java -Djarmode=layertools -jar target/*.jar extract
+Docker is used in two phases, for two different reasons:
 
-FROM eclipse-temurin:21-jre
-RUN useradd --system --uid 1001 app
-WORKDIR /app
-COPY --from=build /app/dependencies/ ./
-COPY --from=build /app/spring-boot-loader/ ./
-COPY --from=build /app/snapshot-dependencies/ ./
-COPY --from=build /app/application/ ./
-USER app
-EXPOSE 8080
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", \
-            "org.springframework.boot.loader.launch.JarLauncher"]
+```text
+Phase 1   docker compose runs the local PostGIS database
+Phase 11  the application itself is packaged as an image
 ```
 
-Newer Spring Boot versions replace `layertools` with `-Djarmode=tools extract --layers`. Use whichever form matches the pinned Boot version.
-
-## Exit criteria
+## Before moving on
 
 ```text
 All performance targets are met, or deviations are documented
 with a root cause.
 
-No high or critical findings from the dependency and ZAP scans.
+No high or critical findings from the dependency and API scans.
 
 A clean deployment from the image to a fresh environment, with a
-restored database backup, succeeds.
+restored database backup, succeeds and passes the SQL invariants.
 ```
+
+---
+
+# Practical Sequencing Advice
+
+Three things will save the most rework, and all three are "do it earlier than feels necessary":
+
+**The security matrix test belongs in Phase 2, not Phase 11.** Built early, it grows with the project. Built late, it has to be reconstructed from finished code, which is exactly when wrong assumptions get locked in.
+
+**The dataset generator belongs in Phase 5.** Phases 6 to 11 all need data to prove anything at all. Without it, every later phase is tested on toy input.
+
+**Geometry fixtures belong in Phase 4, before the overlap SQL.** Spatial bugs produce plausible wrong numbers, and only known-answer fixtures catch them.
+
+If time runs short, Phase 10 can be reduced to the core reports. Phase 9 cannot be skipped — without publish and the double-booking guard, the system produces schedules that nobody can safely use.
 
 ---
 
@@ -1367,33 +838,33 @@ restored database backup, succeeds.
 
 ## Labour-rule values differ from assumptions
 
-Impact is high: schedules could be illegal, or needlessly over-conservative. Likelihood is high, because the values in the rule set are assumptions until someone confirms them.
+Impact is high: schedules could be illegal, or needlessly over-conservative. Likelihood is high, because the values are assumptions until someone confirms them.
 
-Mitigation: rules are data, not code. Rule sets are reviewed with DTC HR and legal before go-live.
+Mitigation: rules are data, not code. Rule sets will be reviewed with DTC HR and legal before go-live.
 
 ## Real data quality is poor
 
-Geometry and legacy spreadsheets may both be messy, which produces wrong overlaps and failed imports. Likelihood is high.
+Geometry and legacy spreadsheets may both be messy, producing wrong overlaps and failed imports. Likelihood is high.
 
-Mitigation: the validation pipeline, dry-run imports, a data-quality report, and explicit estimated-deadhead flags so nobody mistakes an estimate for a measurement.
+Mitigation: the Phase 4 validation pipeline, dry-run imports in Phase 3, a data-quality report, and explicit estimated-deadhead flags so nobody mistakes an estimate for a measurement.
 
 ## Heuristic quality is insufficient
 
 The system might need more duties or buses than necessary. Likelihood is medium.
 
-Mitigation: lower bounds to measure the gap honestly, local search, and a pluggable solver interface so a better algorithm can be dropped in later.
+Mitigation: lower bounds to measure the gap honestly, local search in Phase 8, and a pluggable interface so a better algorithm can replace it later.
 
 ## Full-fleet run time is too long
 
 This would cause missed planning windows. Likelihood is medium.
 
-Mitigation: depot partitioning, parallel workers and a time-bounded search.
+Mitigation: depot partitioning, parallel workers and a time-bounded search, all measured in Phase 11.
 
 ## Scope creep into real-time operations
 
-AVL and live tracking would delay everything. Likelihood is medium.
+Live vehicle tracking would delay everything. Likelihood is medium.
 
-Mitigation: explicitly out of scope for the first version, and stated as such in the project statement.
+Mitigation: explicitly out of scope, and stated as such in the project statement.
 
 ## Spatial query performance at scale
 
@@ -1405,4 +876,4 @@ Mitigation: generated projected columns, GiST indexes, grid-based coverage and m
 
 These would cause double booking. Likelihood is low.
 
-Mitigation: database exclusion constraints, optimistic locking and dedicated concurrency tests.
+Mitigation: database exclusion constraints added in Phase 9 from the start, optimistic locking, and dedicated concurrency tests.

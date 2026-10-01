@@ -1,6 +1,8 @@
 # Automated Bus Scheduling and Route Management System — Edge Cases
 
-This document lists the edge cases the system must handle, what the correct behaviour is, and how it is verified.
+> **Status: design document.** Implementation has not started. Every case below describes required behaviour that the implementation will have to satisfy, and the test that will verify it. No case is implemented or tested yet.
+
+This document lists the edge cases the system must handle, what the correct behaviour has to be, and how it will be verified.
 
 Each case has a stable ID so that tests can reference it directly:
 
@@ -10,15 +12,38 @@ Each case has a stable ID so that tests can reference it directly:
 
 ## Handling principles
 
-A hard constraint is never silently relaxed. When the engine cannot satisfy a rule, it emits a typed conflict with an explanation instead of quietly bending the rule.
+A hard constraint must never be silently relaxed. When the engine cannot satisfy a rule, it will emit a typed conflict with an explanation instead of quietly bending the rule.
 
-Input is validated at the boundary and guarded in the database. Bad input is rejected with a clear 400 or 422, and invariants such as "no double booking" are also enforced by database constraints.
+Input will be validated at the boundary and guarded in the database. Bad input is rejected with a clear 400 or 422, and invariants such as "no double booking" are also enforced by database constraints.
 
 Published means immutable. Changes create a new version. Anything that invalidates a published schedule raises conflicts and sets a revalidation flag.
 
-Explainability matters more than cleverness. Every uncovered trip, infeasible duty and unassigned slot carries reasons a scheduler can act on.
+Explainability matters more than cleverness. Every uncovered trip, infeasible duty and unassigned slot must carry reasons a scheduler can act on.
 
-Runs are deterministic. The same inputs, rule set and seed produce the same output.
+Runs must be deterministic. The same inputs, rule set and seed produce the same output.
+
+## Which phase handles which section
+
+```text
+Section 1   Time and calendar             Phases 5, 7, 9
+Section 2   Timetable and trip data       Phase 5
+Section 3   Vehicle scheduling            Phase 6
+Section 4   Linked duties                 Phase 7
+Section 5   Unlinked duties and handovers Phase 8
+Section 6   Rest and labour rules         Phases 7, 9
+Section 7   Crew assignment               Phase 9
+Section 8   Schedule lifecycle & publish  Phase 9
+Section 9   Geospatial and routes         Phase 4
+Section 10  Data import and quality       Phase 3
+Section 11  API, pagination and filtering Phase 3
+Section 12  Security and access control   Phase 2
+Section 13  Concurrency and consistency   Phases 6, 9
+Section 14  Performance and scale         Phase 11
+Section 15  Reporting                     Phase 10
+Section 16  Operational disruptions       out of scope for v1
+```
+
+Each phase's tests will cover the sections listed against it before that phase is considered complete.
 
 ## Test type legend
 
