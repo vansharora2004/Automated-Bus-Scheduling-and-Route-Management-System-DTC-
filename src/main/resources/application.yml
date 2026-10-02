@@ -59,6 +59,30 @@ app:
   time:
     zone: Asia/Kolkata
     service-day-start: "03:00"
+  security:
+    jwt:
+      issuer: ${JWT_ISSUER:https://dtc-transit.local}
+      audience: ${JWT_AUDIENCE:dtc-transit-api}
+      access-token-ttl: 15m
+      refresh-token-ttl: 7d
+      # Worst-case delay before a disabled account stops being accepted. Must stay well below
+      # access-token-ttl, or revocation would be slower than simply waiting for expiry.
+      token-version-cache-ttl: 60s
+      # PEM key pair. Left blank an ephemeral pair is generated at startup, so no secret is ever
+      # committed. Production must supply both.
+      private-key: ${JWT_PRIVATE_KEY:}
+      public-key: ${JWT_PUBLIC_KEY:}
+    lockout:
+      max-failures: 5
+      duration: 15m
+    rate-limit:
+      attempts-per-minute: 10
+    cors:
+      allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+    bootstrap:
+      username: ${APP_SECURITY_BOOTSTRAP_USERNAME:admin}
+      # No default. Without this, no admin is created.
+      password: ${APP_SECURITY_BOOTSTRAP_PASSWORD:}
 
 logging:
   level:

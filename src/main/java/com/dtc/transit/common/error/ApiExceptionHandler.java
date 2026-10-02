@@ -84,6 +84,18 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.FORBIDDEN, "FORBIDDEN", "Access is denied", request);
     }
 
+    /**
+     * An unmapped path.
+     *
+     * <p>Handled explicitly because the catch-all below would otherwise report a request for a URL that
+     * does not exist as an internal server error, which misdirects anyone reading the logs.
+     */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ProblemDetail handleNoResource(
+            org.springframework.web.servlet.resource.NoResourceFoundException e, WebRequest request) {
+        return problem(HttpStatus.NOT_FOUND, "NOT_FOUND", "No handler for this path", request);
+    }
+
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleUnexpected(Exception e, WebRequest request) {
         // Log the cause here, but never leak internals to the caller (edge case EC-SEC-12).
