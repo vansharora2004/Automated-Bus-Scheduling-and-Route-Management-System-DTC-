@@ -60,6 +60,10 @@ public class SecurityConfig {
                         // otherwise get a parsing error instead of a refusal.
                         .requestMatchers(HttpMethod.POST, "/api/v1/buses/import", "/api/v1/crew/import")
                         .hasAnyRole("ADMIN", "MANAGER")
+                        // Rebuilding the grid discards every cell, and refreshing the coverage view is
+                        // an expensive maintenance action. Both are administrator-only at the URL level.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/coverage/grid", "/api/v1/coverage/refresh")
+                        .hasRole("ADMIN")
                         // Metrics and API docs are not public. Phase 11 moves them to an internal
                         // management port.
                         .requestMatchers("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")

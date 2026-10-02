@@ -66,6 +66,22 @@ public class SecurityTestSupport {
         jdbc.update("DELETE FROM user_role");
         jdbc.update("DELETE FROM app_user");
         jdbc.update("DELETE FROM audit_log");
+        // Timetables before routes: trips reference patterns and stops, timetables reference routes.
+        jdbc.update("DELETE FROM trip");
+        jdbc.update("DELETE FROM headway_band");
+        jdbc.update("DELETE FROM timetable");
+        jdbc.update("DELETE FROM deadhead");
+        jdbc.update("DELETE FROM calendar_exception");
+        // Routes first: they reference depot and stop, so they must go before either.
+        // service_area is deliberately left alone - it is seeded by migration and geometry validation
+        // depends on it.
+        jdbc.update("DELETE FROM route_overlap");
+        jdbc.update("DELETE FROM pattern_stop");
+        jdbc.update("DELETE FROM running_time_band");
+        jdbc.update("DELETE FROM route_pattern");
+        jdbc.update("DELETE FROM route");
+        jdbc.update("DELETE FROM coverage_zone");
+        jdbc.update("DELETE FROM grid_cell");
         jdbc.update("DELETE FROM crew_qualification");
         jdbc.update("DELETE FROM crew_leave");
         jdbc.update("DELETE FROM crew_depot_history");
@@ -141,6 +157,15 @@ public class SecurityTestSupport {
                     "login failed for " + username + ": " + response.getStatusCode() + " " + response.getBody());
         }
         return new Tokens(field(response, "accessToken"), field(response, "refreshToken"));
+    }
+
+    /** The response body as a JSON tree, for assertions that need to navigate structure. */
+    public JsonNode json(ResponseEntity<String> response) {
+        try {
+            return JSON.readTree(response.getBody());
+        } catch (Exception e) {
+            throw new IllegalStateException("response was not JSON: " + response.getBody(), e);
+        }
     }
 
     /** Reads one string field from a JSON response body. */

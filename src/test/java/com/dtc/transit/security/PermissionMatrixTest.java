@@ -16,7 +16,9 @@ import org.springframework.boot.test.autoconfigure.actuate.observability.AutoCon
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.server.PathContainer;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
+import org.springframework.web.util.pattern.PathPatternParser;
 
 import com.dtc.transit.support.SecurityWebTest;
 import com.dtc.transit.user.Role;
@@ -94,6 +96,43 @@ class PermissionMatrixTest extends SecurityWebTest {
 
     private static final String TRANSFER = """
             {"depotId":1,"effectiveFrom":"2026-05-01"}""";
+
+    private static final String ROUTE =
+            """
+            {"routeNo":"MTX-R1","name":"Matrix route","depotId":1}""";
+
+    private static final String PATTERN =
+            """
+            {"geometry":{"type":"LineString","coordinates":[[77.20,28.60],[77.20,28.64]]}}""";
+
+    private static final String OVERLAP_QUERY =
+            """
+            {"geometry":{"type":"LineString","coordinates":[[77.20,28.60],[77.20,28.64]]}}""";
+
+    private static final String DECISION = """
+            {"approve":true,"note":"ok"}""";
+
+    private static final String ACTIVATE = """
+            {"effectiveFrom":"2026-06-01"}""";
+
+    private static final String COVERAGE_GAIN = """
+            {"stopIds":[1]}""";
+
+    private static final String RUNNING_TIMES =
+            """
+            {"dayType":"WEEKDAY","bands":[{"fromSec":21600,"toSec":36000,"runningSec":3600}]}""";
+
+    private static final String TIMETABLE =
+            """
+            {"routeId":999999,"dayType":"WEEKDAY","validFrom":"2026-06-01"}""";
+
+    private static final String HEADWAY_BANDS =
+            """
+            {"bands":[{"fromSec":21600,"toSec":36000,"headwaySec":600}]}""";
+
+    private static final String CALENDAR_EXCEPTION =
+            """
+            {"serviceDate":"2026-10-02","dayTypeOverride":"SUNDAY","note":"Gandhi Jayanti"}""";
 
     static Stream<Case> cases() {
         String newUser =
@@ -230,6 +269,262 @@ class PermissionMatrixTest extends SecurityWebTest {
                 new Case(HttpMethod.GET, "/api/v1/users", Caller.MANAGER_DEPOT_1, HttpStatus.FORBIDDEN, null),
                 new Case(HttpMethod.GET, "/api/v1/users", Caller.ADMIN_HQ, HttpStatus.OK, null),
 
+                // ---- Phase 4 routes and coverage ----
+                // Routes are readable by every authenticated role; planners own them.
+                new Case(HttpMethod.GET, "/api/v1/routes", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(HttpMethod.GET, "/api/v1/routes", Caller.SCHEDULER_DEPOT_1, HttpStatus.OK, null),
+                new Case(HttpMethod.GET, "/api/v1/routes/999999", Caller.ADMIN_HQ, HttpStatus.NOT_FOUND, null),
+                new Case(HttpMethod.POST, "/api/v1/routes", Caller.MANAGER_DEPOT_1, HttpStatus.FORBIDDEN, ROUTE),
+                new Case(
+                        HttpMethod.POST, "/api/v1/routes", Caller.SCHEDULER_DEPOT_1, HttpStatus.FORBIDDEN, ROUTE),
+
+                // Drawing geometry is a planner's job, not a manager's.
+                new Case(
+                        HttpMethod.PUT,
+                        "/api/v1/routes/999999/patterns/UP",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        PATTERN),
+                new Case(
+                        HttpMethod.PUT,
+                        "/api/v1/routes/999999/patterns/UP",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.NOT_FOUND,
+                        PATTERN),
+
+                // Ad-hoc analysis is the tool a planner uses while drawing; a scheduler has no use for it.
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/routes/overlap-analysis",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        OVERLAP_QUERY),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/routes/overlap-analysis",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.OK,
+                        OVERLAP_QUERY),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/routes/999999/overlaps",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/routes/999999/overlaps",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.NOT_FOUND,
+                        null),
+
+                // Submitting is the planner's; deciding, activating and retiring are the manager's. This
+                // split is what makes the separation-of-duties rule meaningful.
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/routes/999999/submit",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/routes/999999/decision",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        DECISION),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/routes/999999/activate",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        ACTIVATE),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/routes/999999/retire",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+
+                // Coverage reporting is for planning roles; the maintenance actions are administrator-only.
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/coverage/zones",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/coverage/gain",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        COVERAGE_GAIN),
+                new Case(HttpMethod.POST, "/api/v1/coverage/grid", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+                new Case(
+                        HttpMethod.POST, "/api/v1/coverage/refresh", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+
+                // ---- Phase 5 timetables, trips and the calendar ----
+                // Running times describe the road, so they are the planner's to set and anyone's to read.
+                new Case(
+                        HttpMethod.PUT,
+                        "/api/v1/routes/999999/patterns/UP/running-times",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        RUNNING_TIMES),
+                new Case(
+                        HttpMethod.PUT,
+                        "/api/v1/routes/999999/patterns/UP/running-times",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.NOT_FOUND,
+                        RUNNING_TIMES),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/routes/999999/patterns/UP/running-times",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+
+                // Timetables are the planner's to build. A manager approves routes but does not write
+                // headways, and a scheduler consumes timetables rather than authoring them.
+                new Case(
+                        HttpMethod.POST, "/api/v1/timetables", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, TIMETABLE),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/timetables",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        TIMETABLE),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/timetables",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        TIMETABLE),
+                new Case(HttpMethod.POST, "/api/v1/timetables", Caller.PLANNER_HQ, HttpStatus.NOT_FOUND, TIMETABLE),
+
+                // Every authenticated role may read a timetable: a scheduler cannot build blocks without it.
+                new Case(
+                        HttpMethod.GET, "/api/v1/timetables/999999", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/timetables/999999",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                // Called without its required parameters on purpose. The point of the row is that
+                // authorization decides before binding does: anonymous is refused, while a scheduler gets
+                // as far as the handler and is told the request is malformed.
+                new Case(
+                        HttpMethod.GET, "/api/v1/timetables/active", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/timetables/active",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.BAD_REQUEST,
+                        null),
+
+                // Asked by date rather than by day type, so the holiday calendar cannot be skipped.
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/timetables/for-date",
+                        Caller.ANONYMOUS,
+                        HttpStatus.UNAUTHORIZED,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/timetables/for-date",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.BAD_REQUEST,
+                        null),
+
+                new Case(
+                        HttpMethod.PUT,
+                        "/api/v1/timetables/999999/headway-bands/UP",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        HEADWAY_BANDS),
+                new Case(
+                        HttpMethod.PUT,
+                        "/api/v1/timetables/999999/headway-bands/UP",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.NOT_FOUND,
+                        HEADWAY_BANDS),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/timetables/999999/generate-trips",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/timetables/999999/generate-trips",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/timetables/999999/activate",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/timetables/999999/retire",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+
+                // Trips are read-only over the API and readable by every authenticated role.
+                new Case(HttpMethod.GET, "/api/v1/trips", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(HttpMethod.GET, "/api/v1/trips", Caller.SCHEDULER_DEPOT_1, HttpStatus.OK, null),
+
+                // The calendar is read by everyone and written by planners: a holiday changes what the
+                // whole network runs, so it is not a depot-local decision.
+                new Case(HttpMethod.GET, "/api/v1/calendar/day-type", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/calendar/day-type",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.BAD_REQUEST,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/calendar/exceptions",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.BAD_REQUEST,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/calendar/exceptions",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        CALENDAR_EXCEPTION),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/calendar/exceptions",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.OK,
+                        CALENDAR_EXCEPTION),
+
+                // Deadheads are what a scheduler needs most, so reads are open to every authenticated role.
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/deadheads/estimated",
+                        Caller.ANONYMOUS,
+                        HttpStatus.UNAUTHORIZED,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/deadheads/estimated",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.OK,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/deadheads",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.BAD_REQUEST,
+                        null),
+
                 // Health must answer before any token exists, for liveness probes.
                 new Case(HttpMethod.GET, "/actuator/health", Caller.ANONYMOUS, HttpStatus.OK, null));
     }
@@ -250,9 +545,7 @@ class PermissionMatrixTest extends SecurityWebTest {
     @Test
     @DisplayName("every mapped API endpoint has at least one matrix row")
     void everyEndpointIsClassified() {
-        Set<String> classified = cases()
-                .map(c -> c.method() + " " + normalise(c.path()))
-                .collect(java.util.stream.Collectors.toSet());
+        var parser = new PathPatternParser();
 
         List<String> unclassified = handlerMapping.getHandlerMethods().keySet().stream()
                 .flatMap(info -> {
@@ -261,15 +554,15 @@ class PermissionMatrixTest extends SecurityWebTest {
                             : info.getPathPatternsCondition().getPatternValues();
                     var methods = info.getMethodsCondition().getMethods();
                     return patterns.stream()
-                            .filter(p -> p.startsWith("/api/"))
-                            .flatMap(p -> methods.isEmpty()
-                                    ? Stream.of("GET " + normalise(p))
-                                    : methods.stream().map(m -> m.name() + " " + normalise(p)));
+                            .filter(pattern -> pattern.startsWith("/api/"))
+                            .flatMap(pattern -> methods.isEmpty()
+                                    ? Stream.of("GET " + pattern)
+                                    : methods.stream().map(method -> method.name() + " " + pattern));
                 })
                 .distinct()
-                .filter(key -> !classified.contains(key))
                 // Login and refresh are exercised in depth by the authentication tests.
                 .filter(key -> !key.endsWith("/api/v1/auth/login") && !key.endsWith("/api/v1/auth/refresh"))
+                .filter(key -> !isCovered(parser, key))
                 .sorted()
                 .toList();
 
@@ -278,9 +571,21 @@ class PermissionMatrixTest extends SecurityWebTest {
                 .isEmpty();
     }
 
-    /** Collapses path variables so a concrete test path matches its mapping pattern. */
-    private static String normalise(String path) {
-        return path.replaceAll("\\{[^}]+}", "{id}").replaceAll("/\\d+", "/{id}");
+    /**
+     * Whether some matrix row exercises this mapping.
+     *
+     * <p>Matched with Spring's own {@link PathPatternParser} rather than by normalising strings. The
+     * earlier string approach could not tell {@code /routes/{id}/patterns/{direction}} from a concrete
+     * {@code /routes/9/patterns/UP}, because only one of the two variables looks like an id, so a
+     * genuinely unclassified endpoint could slip through as covered.
+     */
+    private static boolean isCovered(PathPatternParser parser, String methodAndPattern) {
+        int space = methodAndPattern.indexOf(' ');
+        String method = methodAndPattern.substring(0, space);
+        var pattern = parser.parse(methodAndPattern.substring(space + 1));
+
+        return cases().anyMatch(testCase -> testCase.method().name().equals(method)
+                && pattern.matches(PathContainer.parsePath(testCase.path())));
     }
 
     private String tokenFor(Caller caller) {
