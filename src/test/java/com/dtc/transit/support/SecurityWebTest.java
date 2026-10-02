@@ -12,7 +12,11 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
  * the token-version filter, the resource-server filter and the error mapping all sit in the servlet
  * chain, and a mocked dispatcher does not run them in the same order.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        // Repeated from the base class on purpose: an annotation on a subclass replaces the parent's
+        // attributes rather than merging with them, so leaving this out would silently re-enable the poller.
+        properties = {"app.scheduling.worker.enabled=false"})
 public abstract class SecurityWebTest extends PostgisContainerTest {
 
     @Autowired

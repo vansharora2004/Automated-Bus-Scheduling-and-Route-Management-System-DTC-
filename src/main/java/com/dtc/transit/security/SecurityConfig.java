@@ -64,6 +64,22 @@ public class SecurityConfig {
                         // an expensive maintenance action. Both are administrator-only at the URL level.
                         .requestMatchers(HttpMethod.POST, "/api/v1/coverage/grid", "/api/v1/coverage/refresh")
                         .hasRole("ADMIN")
+                        // Publishing a schedule is the one scheduling action with operational consequence
+                        // outside the system: crews are told where to be. Gated here as well as on the
+                        // service, so a missing annotation cannot quietly open it to a scheduler.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/schedules/*/publish")
+                        .hasAnyRole("ADMIN", "MANAGER")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/schedules/*/conflicts/*/resolve")
+                        .hasAnyRole("ADMIN", "MANAGER")
+                        // Everything else about scheduling is for the operating roles. Planners design the
+                        // network; they do not run the depot's day, and a run's progress stream would otherwise
+                        // be readable by anyone logged in. Gated by URL rather than per method because both
+                        // controllers are entirely read-or-operate and a new endpoint should inherit the rule
+                        // rather than need remembering.
+                        .requestMatchers("/api/v1/schedule-runs/**", "/api/v1/schedule-runs")
+                        .hasAnyRole("ADMIN", "MANAGER", "SCHEDULER")
+                        .requestMatchers("/api/v1/schedules/**", "/api/v1/schedules")
+                        .hasAnyRole("ADMIN", "MANAGER", "SCHEDULER")
                         // Metrics and API docs are not public. Phase 11 moves them to an internal
                         // management port.
                         .requestMatchers("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")

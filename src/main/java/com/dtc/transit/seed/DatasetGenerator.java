@@ -64,6 +64,17 @@ public class DatasetGenerator {
 
     private static final double MAX_LAT = 28.93;
 
+    /**
+     * How far a radial route reaches, in degrees.
+     *
+     * <p>About 8 km at this latitude. Chosen so that a route takes roughly half an hour each way at the peak
+     * speed below, which is what lets six buses cover sixty trips at a twenty-minute headway.
+     */
+    private static final double RADIAL_SPAN_DEG = 0.075;
+
+    /** Angular span of a ring route, in radians, giving an arc of comparable length to a radial. */
+    private static final double RING_SWEEP_RAD = 0.55;
+
     /** Service windows, in service-day seconds: morning peak, midday trough, evening peak. */
     private static final int[][] WINDOWS = {
         {6 * 3600, 10 * 3600, 1200}, {10 * 3600, 16 * 3600, 3600}, {16 * 3600, 20 * 3600, 1200}
@@ -136,6 +147,16 @@ public class DatasetGenerator {
     @Transactional
     public void purge() {
         for (String table : List.of(
+                // Schedules first: they reference trips, stops and buses, and a dataset reload must not leave a
+                // roster pointing at trips that no longer exist.
+                "handover",
+                "duty_piece",
+                "duty",
+                "piece_of_work",
+                "conflict",
+                "bus_assignment",
+                "block_event",
+                "vehicle_block",
                 "trip",
                 "headway_band",
                 "timetable",
@@ -156,6 +177,13 @@ public class DatasetGenerator {
                 "bus")) {
             jdbc.update("DELETE FROM " + table);
         }
+
+        // schedule and schedule_run reference each other, so one side has to be broken before either can go.
+        jdbc.update("UPDATE schedule_run SET schedule_id = NULL WHERE schedule_id IS NOT NULL");
+        jdbc.update("DELETE FROM schedule");
+        jdbc.update("DELETE FROM schedule_run");
+        // Depot-scoped rule sets only. The global one is seeded by migration and every run resolves through it.
+        jdbc.update("DELETE FROM rule_set WHERE depot_id IS NOT NULL");
         // app_user references depot, so any account bound to a depot must lose that binding before the
         // depots go. Deleting the accounts instead would lock the operator out of the system they just
         // loaded data into.
@@ -305,23 +333,45 @@ public class DatasetGenerator {
         return routes;
     }
 
-    /** A radial route: outer ring inwards to the centre, which is the dominant Delhi corridor shape. */
+    /**
+     * A radial route: a corridor running from its depot towards the centre.
+     *
+     * <p>Roughly 8 km, not all the way in. The length is what makes the dataset's four headline figures
+     * consistent with each other: 60 trips a day at a 20-minute peak headway needs
+     * {@code ceil(cycle / headway)} buses, and a route long enough to take an hour each way would need twelve
+     * buses rather than the six the plan allocates. Scheduling such a dataset would leave a quarter of its
+     * trips uncovered for arithmetic reasons that say nothing about the scheduler.
+     */
     private List<Point> radialLine(Depot depot, int indexInDepot) {
-        double spread = ((indexInDepot % 7) - 3) * 0.035;
+        double spread = ((indexInDepot % 7) - 3) * 0.02;
         double startLon = depot.lon() + spread;
         double startLat = depot.lat() + spread * 0.6;
-        double endLon = CENTRE_LON + spread * 0.25;
-        double endLat = CENTRE_LAT + spread * 0.15;
+
+        // A unit step from the depot towards the centre, scaled to the target length rather than run all the
+        // way in, so routes stay local to their depot and pull-outs stay short.
+        double towardsCentreLon = CENTRE_LON - depot.lon();
+        double towardsCentreLat = CENTRE_LAT - depot.lat();
+        double magnitude = Math.hypot(towardsCentreLon, towardsCentreLat);
+        double scale = magnitude == 0 ? 0 : RADIAL_SPAN_DEG / magnitude;
+
+        double endLon = startLon + towardsCentreLon * scale;
+        double endLat = startLat + towardsCentreLat * scale;
         return interpolate(startLon, startLat, endLon, endLat, indexInDepot);
     }
 
-    /** A ring route: an arc at constant radius, crossing the radials rather than running along them. */
+    /**
+     * A ring route: an arc at constant radius, crossing the radials rather than running along them.
+     *
+     * <p>The arc is kept to about the same length as a radial route, for the same reason.
+     */
     private List<Point> ringLine(Depot depot, int indexInDepot) {
         double radius = 0.13 + (indexInDepot % 4) * 0.02;
         double baseAngle = Math.atan2(depot.lat() - CENTRE_LAT, depot.lon() - CENTRE_LON);
+        double halfSweep = RING_SWEEP_RAD / 2;
         List<Point> points = new ArrayList<>(DatasetSize.STOPS_PER_ROUTE);
         for (int i = 0; i < DatasetSize.STOPS_PER_ROUTE; i++) {
-            double angle = baseAngle - 0.6 + 1.2 * i / (DatasetSize.STOPS_PER_ROUTE - 1.0);
+            double angle = baseAngle - halfSweep
+                    + RING_SWEEP_RAD * i / (DatasetSize.STOPS_PER_ROUTE - 1.0);
             points.add(new Point(
                     clampLon(CENTRE_LON + radius * Math.cos(angle)),
                     clampLat(CENTRE_LAT + radius * 0.9 * Math.sin(angle))));

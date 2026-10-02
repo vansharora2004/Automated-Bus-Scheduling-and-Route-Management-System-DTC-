@@ -18,9 +18,13 @@ import org.testcontainers.utility.DockerImageName;
  * container's lifecycle to the <em>test class</em>, so with a shared base class the first class to
  * finish shuts the container down and every later class fails with "Failed to obtain JDBC Connection".
  * Ryuk removes the container when the JVM exits, so nothing leaks.
+ *
+ * <p>The background run worker is disabled for every integration test. Tests drive it directly through
+ * {@code RunWorker.pollOnce()}, which is deterministic; a two-second poller would claim runs out from under a
+ * test and turn assertions about queue state into a race that fails once a week.
  */
 @Tag("integration")
-@SpringBootTest
+@SpringBootTest(properties = {"app.scheduling.worker.enabled=false"})
 public abstract class PostgisContainerTest {
 
     @ServiceConnection

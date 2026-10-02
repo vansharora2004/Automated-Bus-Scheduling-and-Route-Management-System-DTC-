@@ -24,10 +24,14 @@ import com.dtc.transit.support.PostgisContainerTest;
  * <p>The checksums produced when this was written, for reference when comparing across machines:
  *
  * <pre>
- * S  1fb5313fdd627eee7d80082750960d0ca3c41c1d92aead5cdf116bc45b8cce17
- * M  7b1ad2760c5bbfb878627a0d7b9335f7d798137b369e1caee8dcfc9878f3c0be
- * L  d4935cff00e904fba98121b9c64ed3adf38b2aa774b0845f34f3a36f48144981
+ * S  9b424c55f64860f6454d96ed3243e0d6407244bd7e475aee5135e8b9585aadd5
+ * M  681cd50772eaec843ac31178c15a49b0027eb111681dea9e3fedbfa510d050c9
+ * L  cfa23ea0eed2b6d294adad7318f68d8aa62f0a84d41b6188513762332177fbd1
  * </pre>
+ *
+ * <p>They changed in Phase 6, when the generated routes were shortened so that the plan's own dataset figures
+ * became consistent with each other: sixty trips a day at a twenty-minute peak headway cannot be covered by six
+ * buses if a route takes an hour each way.
  *
  * <p>They are documented rather than asserted. Pinning them would turn any deliberate change to the generator
  * into an opaque failure, while the run-to-run comparison below catches the accidental drift that actually

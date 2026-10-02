@@ -83,6 +83,15 @@ app:
       username: ${APP_SECURITY_BOOTSTRAP_USERNAME:admin}
       # No default. Without this, no admin is created.
       password: ${APP_SECURITY_BOOTSTRAP_PASSWORD:}
+  scheduling:
+    worker:
+      # Turned off in tests, which drive the worker directly. A background poller claiming runs out
+      # from under a test makes every assertion about queue state a race.
+      enabled: ${APP_SCHEDULING_WORKER_ENABLED:true}
+      poll-interval-ms: 2000
+      # The reaper runs far less often than the heartbeat timeout it enforces, which is fine: a lost
+      # run costs its depot-day slot for at most one reaper interval beyond the timeout.
+      reap-interval-ms: 30000
 
 logging:
   level:

@@ -130,6 +130,35 @@ class PermissionMatrixTest extends SecurityWebTest {
             """
             {"bands":[{"fromSec":21600,"toSec":36000,"headwaySec":600}]}""";
 
+    /** A complete rule set, since the typed record refuses a partial one. */
+    private static final String RULE_SET_RULES =
+            """
+            {"maxWorkPerDutyMin":480,"maxContinuousWorkMin":300,"minBreakMin":30,"maxSpreadOverMin":720,
+             "maxWeeklyWorkMin":2880,"weeklyRestDaysPer7":1,"minRestBetweenDutiesMin":600,
+             "signOnMin":15,"signOffMin":10,"minLayoverMin":5,"minLayoverPct":10,"handoverBufferMin":5,
+             "maxPiecesPerDuty":3,"maxBusChangeoversPerDuty":2,"targetWorkPerDutyMin":450,
+             "minPaidDutyMin":240,"allowOvertime":false,"maxOvertimeMin":60,
+             "midDayDepotReturnGapMin":90,"evRangeReservePct":15,"standbyPoolPct":5,
+             "maxBlockDurationMin":1140,"evChargingMin":45}""";
+
+    private static final String CREATE_RULE_SET =
+            """
+            {"name":"Matrix rules","effectiveFrom":"2031-01-01","rules":%s}""".formatted(RULE_SET_RULES);
+
+    private static final String REPLACE_RULE_SET =
+            """
+            {"effectiveFrom":"2032-01-01","rules":%s}""".formatted(RULE_SET_RULES);
+
+    private static final String VALIDATE_RULE_SET = """
+            {"rules":%s}""".formatted(RULE_SET_RULES);
+
+    private static final String QUEUE_RUN =
+            """
+            {"depotId":999999,"serviceDate":"2026-06-01","mode":"LINKED"}""";
+
+    private static final String RESOLVE_CONFLICT = """
+            {"reason":"accepted by the duty officer"}""";
+
     private static final String CALENDAR_EXCEPTION =
             """
             {"serviceDate":"2026-10-02","dayTypeOverride":"SUNDAY","note":"Gandhi Jayanti"}""";
@@ -523,6 +552,204 @@ class PermissionMatrixTest extends SecurityWebTest {
                         "/api/v1/deadheads",
                         Caller.SCHEDULER_DEPOT_1,
                         HttpStatus.BAD_REQUEST,
+                        null),
+
+                // ---- Phase 6 scheduling ----
+                // Running the depot's day belongs to schedulers and the managers above them. A planner designs
+                // the network and has no business starting a build.
+                new Case(
+                        HttpMethod.POST, "/api/v1/schedule-runs", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED,
+                        QUEUE_RUN),
+                new Case(
+                        HttpMethod.POST, "/api/v1/schedule-runs", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN,
+                        QUEUE_RUN),
+                // A depot that does not exist, so the request is allowed and only then reports the missing row.
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/schedule-runs",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        QUEUE_RUN),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedule-runs/00000000-0000-0000-0000-000000000000",
+                        Caller.ANONYMOUS,
+                        HttpStatus.UNAUTHORIZED,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedule-runs/00000000-0000-0000-0000-000000000000",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedule-runs/00000000-0000-0000-0000-000000000000/events",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/schedule-runs/00000000-0000-0000-0000-000000000000/cancel",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(HttpMethod.GET, "/api/v1/schedule-runs", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+
+                // Schedules are read by the operating roles and by nobody else.
+                new Case(HttpMethod.GET, "/api/v1/schedules", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(HttpMethod.GET, "/api/v1/schedules", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+                new Case(HttpMethod.GET, "/api/v1/schedules/999999", Caller.SCHEDULER_DEPOT_1, HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedules/999999/blocks",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedules/999999/bus-assignments",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedules/999999/conflicts",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/schedules/999999/validate",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/schedules/999999/discard",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        null),
+
+                // Publishing tells crews where to be, so it stops at a manager. Overriding a conflict is the
+                // same kind of decision and carries the same restriction.
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/schedules/999999/publish",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/schedules/999999/publish",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/schedules/999999/conflicts/999999/resolve",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        RESOLVE_CONFLICT),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/schedules/999999/conflicts/999999/resolve",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        RESOLVE_CONFLICT),
+
+                // ---- Phase 7 rules and duties ----
+                // The rules are readable by every authenticated role, because everyone needs to know what the
+                // schedule was judged against. Changing them is an administrator's decision: a rule set decides
+                // what is legal, so it is not a per-depot operational knob.
+                new Case(HttpMethod.GET, "/api/v1/rule-sets", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(HttpMethod.GET, "/api/v1/rule-sets", Caller.SCHEDULER_DEPOT_1, HttpStatus.OK, null),
+                new Case(HttpMethod.GET, "/api/v1/rule-sets", Caller.PLANNER_HQ, HttpStatus.OK, null),
+                new Case(HttpMethod.GET, "/api/v1/rule-sets/999999", Caller.ADMIN_HQ, HttpStatus.NOT_FOUND, null),
+                // Called without its required parameters, so the row shows authorization deciding before binding.
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/rule-sets/effective",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.BAD_REQUEST,
+                        null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/rule-sets",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        CREATE_RULE_SET),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/rule-sets",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        CREATE_RULE_SET),
+                new Case(
+                        HttpMethod.POST, "/api/v1/rule-sets", Caller.ADMIN_HQ, HttpStatus.CREATED, CREATE_RULE_SET),
+                new Case(
+                        HttpMethod.PUT,
+                        "/api/v1/rule-sets/999999",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        REPLACE_RULE_SET),
+                new Case(
+                        HttpMethod.PUT,
+                        "/api/v1/rule-sets/999999",
+                        Caller.ADMIN_HQ,
+                        HttpStatus.NOT_FOUND,
+                        REPLACE_RULE_SET),
+                // Checking a rule set is harmless and useful to anyone editing one.
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/rule-sets/validate",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.OK,
+                        VALIDATE_RULE_SET),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/rule-sets/validate",
+                        Caller.ANONYMOUS,
+                        HttpStatus.UNAUTHORIZED,
+                        VALIDATE_RULE_SET),
+
+                // Duties and handovers follow their schedule: the operating roles, and nobody else.
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedules/999999/duties",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedules/999999/duties",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedules/999999/duties/999999",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedules/999999/handovers",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedules/999999/duty-summary",
+                        Caller.ANONYMOUS,
+                        HttpStatus.UNAUTHORIZED,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/schedules/999999/duty-summary",
+                        Caller.ADMIN_HQ,
+                        HttpStatus.NOT_FOUND,
                         null),
 
                 // Health must answer before any token exists, for liveness probes.

@@ -66,6 +66,22 @@ public class SecurityTestSupport {
         jdbc.update("DELETE FROM user_role");
         jdbc.update("DELETE FROM app_user");
         jdbc.update("DELETE FROM audit_log");
+        // Schedules before timetables: block events reference trips and stops, bus assignments reference
+        // buses, and every one of them hangs off a schedule that hangs off a run.
+        jdbc.update("DELETE FROM handover");
+        jdbc.update("DELETE FROM duty_piece");
+        jdbc.update("DELETE FROM duty");
+        jdbc.update("DELETE FROM piece_of_work");
+        jdbc.update("DELETE FROM conflict");
+        jdbc.update("DELETE FROM bus_assignment");
+        jdbc.update("DELETE FROM block_event");
+        jdbc.update("DELETE FROM vehicle_block");
+        jdbc.update("UPDATE schedule_run SET schedule_id = NULL");
+        jdbc.update("DELETE FROM schedule");
+        jdbc.update("DELETE FROM schedule_run");
+        // Only depot-scoped rule sets. The global one is seeded by migration and resolution depends on it, so
+        // deleting it would make every run fail with NO_RULE_SET.
+        jdbc.update("DELETE FROM rule_set WHERE depot_id IS NOT NULL");
         // Timetables before routes: trips reference patterns and stops, timetables reference routes.
         jdbc.update("DELETE FROM trip");
         jdbc.update("DELETE FROM headway_band");
