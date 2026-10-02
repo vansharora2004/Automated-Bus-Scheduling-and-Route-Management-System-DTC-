@@ -114,3 +114,16 @@ springdoc:
 logging:
   level:
     com.dtc.transit: INFO
+  # Structured logs in production. A log aggregator can filter on traceId to follow one request across every
+  # line it produced, which plain text makes guesswork.
+  structured:
+    format:
+      console: ecs
+management:
+  endpoint:
+    health:
+      # No component detail to unauthenticated probes: which database is down is information an attacker uses.
+      show-details: never
+  metrics:
+    tags:
+      application: dtc-scheduling

@@ -165,7 +165,8 @@ public class CrewController {
             return new CrewResponse(
                     member.getId(),
                     member.getEmployeeCode(),
-                    member.getName(),
+                    // Masked to initials for roles that roster by employee code rather than by name.
+                    com.dtc.transit.common.web.PiiMasking.maskName(member.getName()),
                     member.getCrewRole(),
                     member.getDepot().getId(),
                     member.getLicenceClass(),

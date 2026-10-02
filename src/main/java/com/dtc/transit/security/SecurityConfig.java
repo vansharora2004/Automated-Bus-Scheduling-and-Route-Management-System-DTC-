@@ -82,6 +82,14 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "MANAGER", "SCHEDULER")
                         .requestMatchers("/api/v1/duty-assignments/**", "/api/v1/duty-assignments")
                         .hasAnyRole("ADMIN", "MANAGER", "SCHEDULER")
+                        // Reports and the dashboard read published schedules. A planner designs the network and
+                        // has no operational stake in what ran yesterday.
+                        .requestMatchers("/api/v1/reports/**", "/api/v1/dashboard/**")
+                        .hasAnyRole("ADMIN", "MANAGER", "SCHEDULER")
+                        // The audit trail stops at a manager. It carries who did what, and in an administrator's
+                        // case the personal data inside the change.
+                        .requestMatchers("/api/v1/audit-logs/**", "/api/v1/audit-logs")
+                        .hasAnyRole("ADMIN", "MANAGER")
                         // Metrics and API docs are not public. Phase 11 moves them to an internal
                         // management port.
                         .requestMatchers("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")

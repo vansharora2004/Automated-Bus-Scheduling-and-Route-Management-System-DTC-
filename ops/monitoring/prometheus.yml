@@ -1,0 +1,36 @@
+# Prometheus scrape configuration for the DTC scheduling service.
+#
+# The actuator endpoint is ADMIN-only over HTTP, so the scrape carries a bearer token. In a cluster the
+# management port would be bound to an internal interface instead and this authentication would be unnecessary;
+# that is the Phase 11 item left for the deployment environment.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    service: dtc-scheduling
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: dtc-scheduling
+    metrics_path: /actuator/prometheus
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/dtc-token
+    static_configs:
+      - targets:
+          - app:8080
+    # Relabelled so a dashboard can show the instance without the port noise.
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(:[0-9]+)?'
+        target_label: instance
+        replacement: '$1'
+
+  - job_name: postgres
+    # Requires postgres_exporter alongside the database. Not part of the application image.
+    static_configs:
+      - targets:
+          - postgres-exporter:9187

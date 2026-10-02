@@ -26,17 +26,20 @@ public class RunWorker {
     private final RunBookkeeper bookkeeper;
     private final RunExecutor executor;
     private final RunProgressBroadcaster progress;
+    private final com.dtc.transit.common.config.SchedulingMetrics metrics;
     private final String workerName;
 
     public RunWorker(
             ScheduleRunRepository runs,
             RunBookkeeper bookkeeper,
             RunExecutor executor,
-            RunProgressBroadcaster progress) {
+            RunProgressBroadcaster progress,
+            com.dtc.transit.common.config.SchedulingMetrics metrics) {
         this.runs = runs;
         this.bookkeeper = bookkeeper;
         this.executor = executor;
         this.progress = progress;
+        this.metrics = metrics;
         this.workerName = defaultWorkerName();
     }
 
@@ -70,6 +73,16 @@ public class RunWorker {
         try {
             var result = executor.execute(run, workerName);
             progress.completed(runId, result.metrics());
+
+            metrics.recordRunDuration(
+                    run.getMode().name(), java.time.Duration.ofMillis(result.metrics().elapsedMillis()));
+            // Grouped by type, which is the operational signal: a rise in UNASSIGNED_DUTY is a staffing problem,
+            // a rise in EV_RANGE_EXCEEDED is a fleet one.
+            result.conflicts().stream()
+                    .collect(java.util.stream.Collectors.groupingBy(
+                            com.dtc.transit.scheduling.engine.model.EngineConflict::type,
+                            java.util.stream.Collectors.summingInt(conflict -> 1)))
+                    .forEach(metrics::recordConflict);
         } catch (Exception e) {
             log.error("run {} failed", runId, e);
             // The message reaches the client, not the stack trace: a scheduler needs to know the depot has no
@@ -77,6 +90,7 @@ public class RunWorker {
             String reason = describe(e);
             bookkeeper.fail(runId, reason);
             progress.failed(runId, reason);
+            metrics.recordRunFailure(reason);
         }
     }
 

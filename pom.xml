@@ -28,6 +28,7 @@
     <archunit.version>1.4.1</archunit.version>
     <spotless.version>2.44.3</spotless.version>
     <spotbugs.version>4.8.6.6</spotbugs.version>
+    <dependency.check.version>10.0.4</dependency.check.version>
     <docker.api.version>1.44</docker.api.version>
   </properties>
 
@@ -265,4 +266,44 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- Dependency vulnerability scan.
+         In a profile rather than bound to the lifecycle because the first run downloads the whole NVD
+         database, which takes several minutes and needs network access. A scan that added that to every
+         build would be a scan somebody disabled. CI runs `mvn -Psecurity-scan verify`; a developer runs it
+         before a release.
+
+         failBuildOnCVSS 7 is the gate: high and critical findings fail, medium and low are reported. -->
+    <profile>
+      <id>security-scan</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.owasp</groupId>
+            <artifactId>dependency-check-maven</artifactId>
+            <version>${dependency.check.version}</version>
+            <configuration>
+              <failBuildOnCVSS>7</failBuildOnCVSS>
+              <formats>
+                <format>HTML</format>
+                <format>JSON</format>
+              </formats>
+              <!-- Test-only dependencies are not shipped, so a finding in one is not an exposure. -->
+              <skipTestScope>true</skipTestScope>
+              <nvdApiKeyEnvironmentVariable>NVD_API_KEY</nvdApiKeyEnvironmentVariable>
+            </configuration>
+            <executions>
+              <execution>
+                <goals>
+                  <goal>check</goal>
+                </goals>
+                <phase>verify</phase>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

@@ -1,0 +1,12 @@
+# Keep the build context small and free of anything secret.
+target/
+.git/
+.idea/
+.vscode/
+*.iml
+docs/
+ops/
+.env
+.env.*
+*.log
+**/node_modules/

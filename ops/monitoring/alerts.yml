@@ -1,0 +1,110 @@
+# Alert rules for the DTC scheduling service.
+#
+# Four alerts, covering the four ways this system fails in a way somebody has to act on. Deliberately few: an
+# alert that fires without requiring action trains people to ignore the ones that do.
+#
+# Every rule carries a `for` clause. Without one, a single scrape during a deployment pages somebody.
+
+groups:
+  - name: dtc-scheduling-availability
+    rules:
+      - alert: ServiceDown
+        expr: up{job="dtc-scheduling"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The scheduling service is not responding"
+          description: >-
+            Prometheus has been unable to scrape {{ $labels.instance }} for two minutes. Check the container is
+            running and that /actuator/health/readiness answers.
+          runbook: "docs/Runbook.md#service-down"
+
+      - alert: HighApiLatency
+        # p95 over five minutes, excluding the actuator so a slow scrape does not look like a slow API.
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(http_server_requests_seconds_bucket{job="dtc-scheduling", uri!~"/actuator.*"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency above one second"
+          description: >-
+            The 95th percentile request latency has been above one second for ten minutes. Check connection pool
+            saturation first; a saturated pool shows up as latency everywhere at once rather than on one endpoint.
+          runbook: "docs/Runbook.md#slow-api"
+
+  - name: dtc-scheduling-runs
+    rules:
+      - alert: SchedulingRunFailures
+        # A rate rather than a count: one failure is a bad depot-day, a sustained rate is a broken system.
+        expr: sum(rate(scheduling_run_failures_total{job="dtc-scheduling"}[15m])) > 0.01
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduling runs are failing"
+          description: >-
+            Runs have been failing for fifteen minutes. The `reason` label narrows it: `no_fleet` and `rule_set`
+            are data problems, `worker_lost` means workers are being killed.
+          runbook: "docs/Runbook.md#stuck-or-failing-run"
+
+      - alert: StuckSchedulingRun
+        # The reaper fails a run after two minutes without a heartbeat. A run still RUNNING after fifteen means
+        # the reaper itself is not running.
+        expr: scheduling_runs_running{job="dtc-scheduling"} > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A scheduling run has been running for fifteen minutes"
+          description: >-
+            A depot-day should complete in seconds. Either the reaper has stopped, or a run is genuinely stuck.
+            Check heartbeat_at on schedule_run.
+          runbook: "docs/Runbook.md#stuck-or-failing-run"
+
+      - alert: RunQueueBacklog
+        expr: scheduling_runs_queued{job="dtc-scheduling"} > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The scheduling run queue is backing up"
+          description: >-
+            More than twenty runs have been queued for ten minutes. Either no worker is polling, or runs are
+            being submitted faster than one instance can execute them.
+          runbook: "docs/Runbook.md#stuck-or-failing-run"
+
+  - name: dtc-scheduling-resources
+    rules:
+      - alert: ConnectionPoolSaturated
+        # Pending threads, not active ones. A pool at full utilisation is fine; a pool with threads waiting for a
+        # connection is a queue forming behind the database.
+        expr: hikaricp_connections_pending{job="dtc-scheduling"} > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Threads are waiting for a database connection"
+          description: >-
+            Requests are queueing for connections. Check for a long-running transaction, then pool size against
+            the database's own max_connections.
+          runbook: "docs/Runbook.md#pool-saturation"
+
+      - alert: RevalidationStorm
+        # Published schedules being flagged en masse means master data moved under many of them at once, which
+        # is usually one bad bulk import rather than many real problems.
+        expr: >-
+          increase(scheduling_conflicts_total{job="dtc-scheduling", type="NEEDS_REVALIDATION"}[30m]) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many published schedules need revalidation"
+          description: >-
+            More than fifty revalidation conflicts in thirty minutes. Look for a bulk master-data change rather
+            than treating each schedule separately.
+          runbook: "docs/Runbook.md#revalidation-storm"

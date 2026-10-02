@@ -65,7 +65,10 @@ public class SecurityTestSupport {
         jdbc.update("DELETE FROM refresh_token");
         jdbc.update("DELETE FROM user_role");
         jdbc.update("DELETE FROM app_user");
-        jdbc.update("DELETE FROM audit_log");
+        // TRUNCATE, not DELETE. From Phase 11 the audit log is append-only: UPDATE and DELETE are revoked and
+        // blocked by a trigger on every partition. Retention works the same way in production, by dropping or
+        // truncating whole partitions rather than deleting rows.
+        jdbc.execute("TRUNCATE TABLE audit_log");
         // Schedules before timetables: block events reference trips and stops, bus assignments reference
         // buses, and every one of them hangs off a schedule that hangs off a run.
         jdbc.update("DELETE FROM duty_assignment");

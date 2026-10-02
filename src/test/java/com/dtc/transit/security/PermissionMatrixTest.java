@@ -798,6 +798,66 @@ class PermissionMatrixTest extends SecurityWebTest {
                         HttpStatus.UNPROCESSABLE_ENTITY,
                         OVERRIDE_ASSIGNMENT),
 
+                // ---- Phase 10 reports, dashboard and audit ----
+                // Reports read published schedules: the operating roles, and not a planner. Schedule KPIs stop
+                // at a manager, because they are a management view rather than an operational one.
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/reports/fleet-utilization",
+                        Caller.ANONYMOUS,
+                        HttpStatus.UNAUTHORIZED,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/reports/fleet-utilization",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/reports/fleet-utilization",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.OK,
+                        null),
+                new Case(
+                        HttpMethod.GET, "/api/v1/reports/crew-hours", Caller.MANAGER_DEPOT_1, HttpStatus.OK, null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/reports/schedule-kpis",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.GET, "/api/v1/reports/schedule-kpis", Caller.ADMIN_HQ, HttpStatus.OK, null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/reports/fleet-utilization.csv",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.OK,
+                        null),
+                new Case(
+                        HttpMethod.POST, "/api/v1/reports/refresh", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+                new Case(
+                        HttpMethod.POST, "/api/v1/reports/refresh", Caller.ADMIN_HQ, HttpStatus.NO_CONTENT, null),
+
+                new Case(
+                        HttpMethod.GET, "/api/v1/dashboard/today", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(
+                        HttpMethod.GET, "/api/v1/dashboard/today", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/dashboard/today",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.OK,
+                        null),
+
+                // The audit trail stops at a manager, and payloads are redacted for anyone but an administrator.
+                new Case(HttpMethod.GET, "/api/v1/audit-logs", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(
+                        HttpMethod.GET, "/api/v1/audit-logs", Caller.SCHEDULER_DEPOT_1, HttpStatus.FORBIDDEN, null),
+                new Case(HttpMethod.GET, "/api/v1/audit-logs", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+                new Case(HttpMethod.GET, "/api/v1/audit-logs", Caller.MANAGER_DEPOT_1, HttpStatus.OK, null),
+
                 // Health must answer before any token exists, for liveness probes.
                 new Case(HttpMethod.GET, "/actuator/health", Caller.ANONYMOUS, HttpStatus.OK, null));
     }

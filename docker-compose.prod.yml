@@ -1,0 +1,124 @@
+# Production-shaped compose file.
+#
+# Separate from docker-compose.yml, which runs only the local PostGIS database for development. This one runs the
+# application image as well, with resource limits, health probes and the monitoring stack.
+#
+# Secrets come from the environment, never from this file. Every value below is either a non-secret default or a
+# required variable with no fallback, so a missing secret fails at startup rather than silently running with a
+# development value.
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${DB_NAME:-dtc_transit}
+      POSTGRES_USER: ${DB_USER:?DB_USER is required}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      # WAL archiving is what makes point-in-time recovery possible. Without it a base backup only restores to
+      # the moment it was taken.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /wal/%f && cp %p /wal/%f
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      # Logs any statement over a second, which is how a regressed query plan is found before users report it.
+      - -c
+      - log_min_duration_statement=1000
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - wal-archive:/wal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME:-dtc_transit}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 4G
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${DB_NAME:-dtc_transit}
+      # The application connects as app_rw: DML only, no DDL, and no UPDATE or DELETE on audit_log. Flyway
+      # connects as migrator, which is why the two are configured separately.
+      SPRING_DATASOURCE_USERNAME: ${APP_DB_USER:?APP_DB_USER is required}
+      SPRING_DATASOURCE_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
+      SPRING_FLYWAY_USER: ${MIGRATOR_DB_USER:?MIGRATOR_DB_USER is required}
+      SPRING_FLYWAY_PASSWORD: ${MIGRATOR_DB_PASSWORD:?MIGRATOR_DB_PASSWORD is required}
+      # The RS256 key pair. Without these the application generates an ephemeral pair at startup, which would
+      # invalidate every token on restart and break a multi-instance deployment outright.
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?JWT_PRIVATE_KEY is required}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?JWT_PUBLIC_KEY is required}
+      JWT_ISSUER: ${JWT_ISSUER:-https://dtc-transit.local}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}
+      APP_SECURITY_BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:-}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      # Generous: Flyway runs eleven migrations and the JVM warms up before readiness turns green.
+      start_period: 90s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 2G
+        reservations:
+          memory: 1G
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./ops/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      # The scrape token. The actuator is ADMIN-only, so Prometheus authenticates like any other client.
+      - ${PROMETHEUS_TOKEN_FILE:-./ops/monitoring/dtc-token}:/etc/prometheus/dtc-token:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD is required}
+      # Anonymous access off: the dashboards show operational data about a public transport network.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./ops/monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/dtc.json:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  wal-archive:
+  prometheus-data:
+  grafana-data:
