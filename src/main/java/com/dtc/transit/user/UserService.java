@@ -3,6 +3,9 @@ package com.dtc.transit.user;
 import java.util.Set;
 
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -10,6 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.dtc.transit.common.audit.AuditEvent;
 import com.dtc.transit.common.error.ConflictException;
+import com.dtc.transit.common.filtering.Filters;
+import com.dtc.transit.common.paging.SortWhitelist;
 import com.dtc.transit.security.TokenVersionFilter;
 
 /**
@@ -21,20 +26,40 @@ import com.dtc.transit.security.TokenVersionFilter;
 @Service
 public class UserService {
 
+    /** Sortable properties. The password hash is deliberately absent. */
+    public static final Set<String> SORTABLE = Set.of("username", "enabled", "depotId");
+
     private final AppUserRepository users;
     private final PasswordEncoder passwordEncoder;
     private final ApplicationEventPublisher events;
     private final TokenVersionFilter tokenVersionFilter;
+    private final SortWhitelist sortWhitelist;
 
     public UserService(
             AppUserRepository users,
             PasswordEncoder passwordEncoder,
             ApplicationEventPublisher events,
-            TokenVersionFilter tokenVersionFilter) {
+            TokenVersionFilter tokenVersionFilter,
+            SortWhitelist sortWhitelist) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.events = events;
         this.tokenVersionFilter = tokenVersionFilter;
+        this.sortWhitelist = sortWhitelist;
+    }
+
+    /**
+     * Lists accounts.
+     *
+     * <p>Deferred from Phase 2 so it could be built on the shared paging framework rather than growing
+     * its own and then being rewritten.
+     */
+    @PreAuthorize("hasRole('ADMIN')")
+    @Transactional(readOnly = true)
+    public Page<AppUser> search(Boolean enabled, Long depotId, String q, Pageable pageable) {
+        Specification<AppUser> spec = Specification.allOf(
+                Filters.eq("enabled", enabled), Filters.eq("depotId", depotId), Filters.contains("username", q));
+        return users.findAll(spec, sortWhitelist.apply(pageable, SORTABLE));
     }
 
     @PreAuthorize("hasRole('ADMIN')")

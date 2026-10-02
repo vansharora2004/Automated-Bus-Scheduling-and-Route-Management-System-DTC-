@@ -55,6 +55,11 @@ public class SecurityConfig {
                         // service, so a missing annotation cannot silently open it up.
                         .requestMatchers("/api/v1/users/**")
                         .hasRole("ADMIN")
+                        // Bulk import is guarded here rather than on the controller. Multipart parts are
+                        // resolved before method security would run, so an unauthorised caller would
+                        // otherwise get a parsing error instead of a refusal.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/buses/import", "/api/v1/crew/import")
+                        .hasAnyRole("ADMIN", "MANAGER")
                         // Metrics and API docs are not public. Phase 11 moves them to an internal
                         // management port.
                         .requestMatchers("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")

@@ -64,6 +64,37 @@ class PermissionMatrixTest extends SecurityWebTest {
         SCHEDULER_DEPOT_1
     }
 
+    /** Request bodies reused across rows, so a row reads as a permission statement, not a payload. */
+    private static final String DEPOT =
+            """
+            {"code":"MTX-DPT","name":"Matrix depot","longitude":77.1,"latitude":28.6}""";
+
+    private static final String STOP =
+            """
+            {"code":"MTX-STP","name":"Matrix stop","longitude":77.1,"latitude":28.6}""";
+
+    private static final String BUS =
+            """
+            {"registrationNo":"DLMTX0001","fleetNo":"M-1","depotId":1,"busType":"STANDARD",
+             "fuelType":"CNG","capacity":40}""";
+
+    private static final String BUS_STATUS = """
+            {"status":"BREAKDOWN"}""";
+
+    private static final String CREW =
+            """
+            {"employeeCode":"090001","name":"Matrix Crew","crewRole":"CONDUCTOR","depotId":1}""";
+
+    private static final String LEAVE =
+            """
+            {"from":"2026-05-01T04:00:00Z","to":"2026-05-01T09:00:00Z","leaveType":"CASUAL"}""";
+
+    private static final String QUALIFICATION = """
+            {"code":"EV"}""";
+
+    private static final String TRANSFER = """
+            {"depotId":1,"effectiveFrom":"2026-05-01"}""";
+
     static Stream<Case> cases() {
         String newUser =
                 """
@@ -100,6 +131,104 @@ class PermissionMatrixTest extends SecurityWebTest {
                 new Case(HttpMethod.GET, "/actuator/prometheus", Caller.ADMIN_HQ, HttpStatus.OK, null),
                 new Case(HttpMethod.GET, "/v3/api-docs", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
                 new Case(HttpMethod.GET, "/v3/api-docs", Caller.ADMIN_HQ, HttpStatus.OK, null),
+
+                // ---- Phase 3 master data ----
+                // Depots are readable by every authenticated role; only ADMIN may create one.
+                new Case(HttpMethod.GET, "/api/v1/depots", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(HttpMethod.GET, "/api/v1/depots", Caller.SCHEDULER_DEPOT_1, HttpStatus.OK, null),
+                new Case(HttpMethod.GET, "/api/v1/depots", Caller.PLANNER_HQ, HttpStatus.OK, null),
+                new Case(HttpMethod.GET, "/api/v1/depots/999999", Caller.ADMIN_HQ, HttpStatus.NOT_FOUND, null),
+                new Case(HttpMethod.POST, "/api/v1/depots", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, DEPOT),
+                new Case(HttpMethod.POST, "/api/v1/depots", Caller.MANAGER_DEPOT_1, HttpStatus.FORBIDDEN, DEPOT),
+                new Case(HttpMethod.POST, "/api/v1/depots", Caller.ADMIN_HQ, HttpStatus.CREATED, DEPOT),
+
+                // Stops are network-wide: planners own them, every authenticated role may read them.
+                new Case(HttpMethod.GET, "/api/v1/stops", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(HttpMethod.GET, "/api/v1/stops", Caller.SCHEDULER_DEPOT_1, HttpStatus.OK, null),
+                new Case(HttpMethod.GET, "/api/v1/stops/999999", Caller.ADMIN_HQ, HttpStatus.NOT_FOUND, null),
+                new Case(HttpMethod.POST, "/api/v1/stops", Caller.SCHEDULER_DEPOT_1, HttpStatus.FORBIDDEN, STOP),
+                new Case(HttpMethod.POST, "/api/v1/stops", Caller.MANAGER_DEPOT_1, HttpStatus.FORBIDDEN, STOP),
+                new Case(HttpMethod.POST, "/api/v1/stops", Caller.PLANNER_HQ, HttpStatus.CREATED, STOP),
+
+                // Buses: planners may read the fleet but never change it.
+                new Case(HttpMethod.GET, "/api/v1/buses", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(HttpMethod.GET, "/api/v1/buses", Caller.SCHEDULER_DEPOT_1, HttpStatus.OK, null),
+                new Case(HttpMethod.GET, "/api/v1/buses/999999", Caller.ADMIN_HQ, HttpStatus.NOT_FOUND, null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/buses/999999/unavailability",
+                        Caller.ADMIN_HQ,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(HttpMethod.POST, "/api/v1/buses", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, BUS),
+                new Case(HttpMethod.POST, "/api/v1/buses", Caller.SCHEDULER_DEPOT_1, HttpStatus.FORBIDDEN, BUS),
+                new Case(
+                        HttpMethod.PATCH,
+                        "/api/v1/buses/999999/status",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        BUS_STATUS),
+                // A scheduler may record a breakdown in their own depot, so the request is permitted and
+                // only then reports the missing bus.
+                new Case(
+                        HttpMethod.PATCH,
+                        "/api/v1/buses/999999/status",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        BUS_STATUS),
+                new Case(HttpMethod.POST, "/api/v1/buses/import", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/buses/import",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        null),
+
+                // Crew: planners have no business in crew records at all.
+                new Case(HttpMethod.GET, "/api/v1/crew", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(HttpMethod.GET, "/api/v1/crew", Caller.SCHEDULER_DEPOT_1, HttpStatus.OK, null),
+                new Case(HttpMethod.GET, "/api/v1/crew", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+                new Case(HttpMethod.GET, "/api/v1/crew/999999", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+                new Case(HttpMethod.GET, "/api/v1/crew/999999", Caller.ADMIN_HQ, HttpStatus.NOT_FOUND, null),
+                new Case(HttpMethod.GET, "/api/v1/crew/999999/leaves", Caller.ADMIN_HQ, HttpStatus.NOT_FOUND, null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/crew/999999/qualifications",
+                        Caller.ADMIN_HQ,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/crew/999999/depot-history",
+                        Caller.ADMIN_HQ,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                new Case(HttpMethod.POST, "/api/v1/crew", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, CREW),
+                new Case(HttpMethod.POST, "/api/v1/crew", Caller.SCHEDULER_DEPOT_1, HttpStatus.FORBIDDEN, CREW),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/crew/999999/leaves",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        LEAVE),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/crew/999999/qualifications",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        QUALIFICATION),
+                new Case(
+                        HttpMethod.POST,
+                        "/api/v1/crew/999999/transfer",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.FORBIDDEN,
+                        TRANSFER),
+                new Case(HttpMethod.POST, "/api/v1/crew/import", Caller.PLANNER_HQ, HttpStatus.FORBIDDEN, null),
+
+                // The user list, deferred from Phase 2 so it could use the shared paging framework.
+                new Case(HttpMethod.GET, "/api/v1/users", Caller.ANONYMOUS, HttpStatus.UNAUTHORIZED, null),
+                new Case(HttpMethod.GET, "/api/v1/users", Caller.MANAGER_DEPOT_1, HttpStatus.FORBIDDEN, null),
+                new Case(HttpMethod.GET, "/api/v1/users", Caller.ADMIN_HQ, HttpStatus.OK, null),
 
                 // Health must answer before any token exists, for liveness probes.
                 new Case(HttpMethod.GET, "/actuator/health", Caller.ANONYMOUS, HttpStatus.OK, null));

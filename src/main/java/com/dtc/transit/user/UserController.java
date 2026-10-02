@@ -9,6 +9,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
 
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -33,6 +36,16 @@ public class UserController {
 
     public UserController(UserService userService) {
         this.userService = userService;
+    }
+
+    @GetMapping
+    public com.dtc.transit.common.paging.PageResponse<UserResponse> list(
+            @RequestParam(required = false) Boolean enabled,
+            @RequestParam(required = false) Long depotId,
+            @RequestParam(required = false) String q,
+            @PageableDefault(sort = "username") Pageable pageable) {
+        return com.dtc.transit.common.paging.PageResponse.of(
+                userService.search(enabled, depotId, q, pageable), UserResponse::from);
     }
 
     @PostMapping

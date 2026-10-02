@@ -51,7 +51,13 @@ public class SecurityTestSupport {
     @Autowired
     private LoginRateLimiter rateLimiter;
 
-    /** Removes every account, token and audit row so each test starts from a known state. */
+    /**
+     * Removes every account, token, audit row and master-data row so each test starts from a known
+     * state.
+     *
+     * <p>Deletion order follows the foreign keys inwards. {@code app_user} references {@code depot} from
+     * Phase 3 onward, so accounts go before depots.
+     */
     public void reset() {
         // Every test logs in from 127.0.0.1, so without this the per-address budget is shared across
         // unrelated cases and later tests fail with 429 for reasons that have nothing to do with them.
@@ -60,11 +66,49 @@ public class SecurityTestSupport {
         jdbc.update("DELETE FROM user_role");
         jdbc.update("DELETE FROM app_user");
         jdbc.update("DELETE FROM audit_log");
+        jdbc.update("DELETE FROM crew_qualification");
+        jdbc.update("DELETE FROM crew_leave");
+        jdbc.update("DELETE FROM crew_depot_history");
+        jdbc.update("DELETE FROM crew_member");
+        jdbc.update("DELETE FROM bus_unavailability");
+        jdbc.update("DELETE FROM bus");
+        jdbc.update("DELETE FROM stop");
+        jdbc.update("DELETE FROM depot");
     }
 
+    /**
+     * Creates an account, first making sure the depot it is bound to exists.
+     *
+     * <p>Phase 3 added the foreign key from {@code app_user.depot_id}, so a test that wants a
+     * depot-bound user needs a real depot row behind it. Seeding one here keeps the Phase 2 tests
+     * readable: they care that the user belongs to "some depot", not which.
+     */
     public AppUser createUser(String username, Long depotId, Role... roles) {
+        if (depotId != null) {
+            ensureDepot(depotId);
+        }
         var user = new AppUser(username, passwordEncoder.encode(PASSWORD), Set.of(roles), depotId);
         return users.save(user);
+    }
+
+    /** Inserts a depot with an explicit id, keeping the sequence clear of it. */
+    public void ensureDepot(Long id) {
+        Integer existing =
+                jdbc.queryForObject("SELECT count(*) FROM depot WHERE id = ?", Integer.class, id);
+        if (existing != null && existing > 0) {
+            return;
+        }
+        jdbc.update(
+                """
+                INSERT INTO depot (id, code, name, location, parking_capacity, charging_bays)
+                VALUES (?, ?, ?, ST_SetSRID(ST_MakePoint(77.2, 28.6), 4326), 100, 4)
+                """,
+                id,
+                "FIXTURE-" + id,
+                "Fixture depot " + id);
+        // Keep generated ids clear of the explicit one, so a later insert cannot collide.
+        jdbc.queryForObject("SELECT setval('depot_seq', GREATEST(?, (SELECT last_value FROM depot_seq)))",
+                Long.class, id + 1000);
     }
 
     public ResponseEntity<String> login(TestRestTemplate rest, String username, String password) {

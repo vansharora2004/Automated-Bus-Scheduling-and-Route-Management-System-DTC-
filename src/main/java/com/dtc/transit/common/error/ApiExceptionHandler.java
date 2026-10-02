@@ -65,6 +65,21 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", "Request body could not be read", request);
     }
 
+    /**
+     * A request that should have been multipart but was not.
+     *
+     * <p>Handled explicitly because the catch-all would report a client mistake as an internal error.
+     */
+    @ExceptionHandler(org.springframework.web.multipart.MultipartException.class)
+    public ProblemDetail handleMultipart(
+            org.springframework.web.multipart.MultipartException e, WebRequest request) {
+        return problem(
+                HttpStatus.BAD_REQUEST,
+                "MULTIPART_EXPECTED",
+                "This endpoint expects a multipart upload with a 'file' part",
+                request);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ProblemDetail handleIllegalArgument(IllegalArgumentException e, WebRequest request) {
         return problem(HttpStatus.BAD_REQUEST, "INVALID_ARGUMENT", e.getMessage(), request);
