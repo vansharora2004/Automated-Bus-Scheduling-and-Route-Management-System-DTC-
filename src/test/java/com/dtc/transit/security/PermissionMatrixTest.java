@@ -152,6 +152,10 @@ class PermissionMatrixTest extends SecurityWebTest {
     private static final String VALIDATE_RULE_SET = """
             {"rules":%s}""".formatted(RULE_SET_RULES);
 
+    private static final String OVERRIDE_ASSIGNMENT =
+            """
+            {"crewMemberId":1,"reason":"covering a late sickness"}""";
+
     private static final String QUEUE_RUN =
             """
             {"depotId":999999,"serviceDate":"2026-06-01","mode":"LINKED"}""";
@@ -751,6 +755,48 @@ class PermissionMatrixTest extends SecurityWebTest {
                         Caller.ADMIN_HQ,
                         HttpStatus.NOT_FOUND,
                         null),
+
+                // ---- Phase 9 crew assignments ----
+                // Rosters are operational: the roles that run the depot can read and change them, and a planner
+                // cannot. The override additionally needs If-Match, which the flow test covers.
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/duty-assignments/999999",
+                        Caller.ANONYMOUS,
+                        HttpStatus.UNAUTHORIZED,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/duty-assignments/999999",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        null),
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/duty-assignments/999999",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.NOT_FOUND,
+                        null),
+                // Called without its required parameter, so the row shows authorization deciding before binding.
+                new Case(
+                        HttpMethod.GET,
+                        "/api/v1/duty-assignments",
+                        Caller.MANAGER_DEPOT_1,
+                        HttpStatus.BAD_REQUEST,
+                        null),
+                new Case(
+                        HttpMethod.PATCH,
+                        "/api/v1/duty-assignments/999999",
+                        Caller.PLANNER_HQ,
+                        HttpStatus.FORBIDDEN,
+                        OVERRIDE_ASSIGNMENT),
+                // A scheduler is allowed through, and is then told the override needs a version.
+                new Case(
+                        HttpMethod.PATCH,
+                        "/api/v1/duty-assignments/999999",
+                        Caller.SCHEDULER_DEPOT_1,
+                        HttpStatus.UNPROCESSABLE_ENTITY,
+                        OVERRIDE_ASSIGNMENT),
 
                 // Health must answer before any token exists, for liveness probes.
                 new Case(HttpMethod.GET, "/actuator/health", Caller.ANONYMOUS, HttpStatus.OK, null));

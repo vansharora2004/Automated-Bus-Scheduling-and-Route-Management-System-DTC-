@@ -21,11 +21,22 @@ public final class ConflictTypes {
     public static final String SPREAD_OVER_EXCEEDED = "SPREAD_OVER_EXCEEDED";
     public static final String HANDOVER_INFEASIBLE = "HANDOVER_INFEASIBLE";
 
+    // ---- hard: crew assignment, from Phase 9 -------------------------------
+    public static final String UNASSIGNED_DUTY = "UNASSIGNED_DUTY";
+    public static final String CREW_DOUBLE_BOOKED = "CREW_DOUBLE_BOOKED";
+    public static final String INSUFFICIENT_REST = "INSUFFICIENT_REST";
+    public static final String WEEKLY_HOURS_EXCEEDED = "WEEKLY_HOURS_EXCEEDED";
+    public static final String WEEKLY_REST_MISSING = "WEEKLY_REST_MISSING";
+    public static final String LICENCE_INVALID = "LICENCE_INVALID";
+    public static final String CREW_ON_LEAVE = "CREW_ON_LEAVE";
+    public static final String QUALIFICATION_MISSING = "QUALIFICATION_MISSING";
+
     // ---- soft: warnings only -----------------------------------------------
     public static final String ESTIMATED_DEADHEAD = "ESTIMATED_DEADHEAD";
     public static final String SHORT_DUTY = "SHORT_DUTY";
     public static final String TOO_MANY_CHANGEOVERS = "TOO_MANY_CHANGEOVERS";
     public static final String FLEET_ABOVE_LOWER_BOUND = "FLEET_ABOVE_LOWER_BOUND";
+    public static final String FAIRNESS_IMBALANCE = "FAIRNESS_IMBALANCE";
 
     private ConflictTypes() {
         // constants only

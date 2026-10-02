@@ -68,6 +68,7 @@ public class SecurityTestSupport {
         jdbc.update("DELETE FROM audit_log");
         // Schedules before timetables: block events reference trips and stops, bus assignments reference
         // buses, and every one of them hangs off a schedule that hangs off a run.
+        jdbc.update("DELETE FROM duty_assignment");
         jdbc.update("DELETE FROM handover");
         jdbc.update("DELETE FROM duty_piece");
         jdbc.update("DELETE FROM duty");

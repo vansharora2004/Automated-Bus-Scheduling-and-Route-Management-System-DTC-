@@ -16,7 +16,10 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         // Repeated from the base class on purpose: an annotation on a subclass replaces the parent's
         // attributes rather than merging with them, so leaving this out would silently re-enable the poller.
-        properties = {"app.scheduling.worker.enabled=false"})
+        properties = {
+            "app.scheduling.worker.enabled=false",
+            "app.scheduling.revalidation.enabled=false"
+        })
 public abstract class SecurityWebTest extends PostgisContainerTest {
 
     @Autowired

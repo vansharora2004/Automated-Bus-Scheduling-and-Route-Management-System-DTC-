@@ -92,6 +92,11 @@ app:
       # The reaper runs far less often than the heartbeat timeout it enforces, which is fine: a lost
       # run costs its depot-day slot for at most one reaper interval beyond the timeout.
       reap-interval-ms: 30000
+    revalidation:
+      # Off in tests, which call the job directly. A timer firing mid-test would flag schedules the test is
+      # still asserting about.
+      enabled: ${APP_SCHEDULING_REVALIDATION_ENABLED:true}
+      interval-ms: 300000
 
 logging:
   level:

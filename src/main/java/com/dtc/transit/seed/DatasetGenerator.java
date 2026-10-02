@@ -149,6 +149,7 @@ public class DatasetGenerator {
         for (String table : List.of(
                 // Schedules first: they reference trips, stops and buses, and a dataset reload must not leave a
                 // roster pointing at trips that no longer exist.
+                "duty_assignment",
                 "handover",
                 "duty_piece",
                 "duty",

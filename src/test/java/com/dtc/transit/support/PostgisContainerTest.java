@@ -24,7 +24,11 @@ import org.testcontainers.utility.DockerImageName;
  * test and turn assertions about queue state into a race that fails once a week.
  */
 @Tag("integration")
-@SpringBootTest(properties = {"app.scheduling.worker.enabled=false"})
+@SpringBootTest(
+        properties = {
+            "app.scheduling.worker.enabled=false",
+            "app.scheduling.revalidation.enabled=false"
+        })
 public abstract class PostgisContainerTest {
 
     @ServiceConnection

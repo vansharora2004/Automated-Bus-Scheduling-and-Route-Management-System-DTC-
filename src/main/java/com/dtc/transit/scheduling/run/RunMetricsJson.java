@@ -20,7 +20,7 @@ final class RunMetricsJson {
                         + "\"minFleetLowerBound\":%s,\"busesAssigned\":%d,\"blocksUnassigned\":%d,"
                         + "\"duties\":%d,\"handovers\":%d,\"serviceKm\":%s,\"deadKm\":%s,"
                         + "\"deadKmRatio\":%s,\"hardConflicts\":%d,\"softConflicts\":%d,"
-                        + "\"elapsedMillis\":%d,\"coverageRatio\":%s}")
+                        + "\"elapsedMillis\":%d,\"coverageRatio\":%s,\"outputHash\":\"%s\"}")
                 .formatted(
                         metrics.tripsTotal(),
                         metrics.tripsCovered(),
@@ -37,7 +37,8 @@ final class RunMetricsJson {
                         metrics.hardConflicts(),
                         metrics.softConflicts(),
                         metrics.elapsedMillis(),
-                        round(metrics.coverageRatio()));
+                        round(metrics.coverageRatio()),
+                        metrics.outputHash() == null ? "" : metrics.outputHash());
     }
 
     private static double round(double value) {

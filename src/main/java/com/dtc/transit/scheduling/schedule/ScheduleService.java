@@ -19,6 +19,7 @@ import com.dtc.transit.common.audit.AuditEvent;
 import com.dtc.transit.common.error.BusinessRuleException;
 import com.dtc.transit.common.error.ConflictException;
 import com.dtc.transit.common.error.NotFoundException;
+import com.dtc.transit.scheduling.crew.DutyAssignmentRepository;
 import com.dtc.transit.scheduling.engine.model.Severity;
 import com.dtc.transit.security.DepotAccessEvaluator;
 
@@ -38,6 +39,7 @@ public class ScheduleService {
     private final VehicleBlockRepository blocks;
     private final ConflictRepository conflicts;
     private final BusAssignmentRepository assignments;
+    private final DutyAssignmentRepository crewAssignments;
     private final DepotAccessEvaluator depotAccess;
     private final ApplicationEventPublisher events;
     private final Clock clock;
@@ -47,6 +49,7 @@ public class ScheduleService {
             VehicleBlockRepository blocks,
             ConflictRepository conflicts,
             BusAssignmentRepository assignments,
+            DutyAssignmentRepository crewAssignments,
             DepotAccessEvaluator depotAccess,
             ApplicationEventPublisher events,
             Clock clock) {
@@ -54,6 +57,7 @@ public class ScheduleService {
         this.blocks = blocks;
         this.conflicts = conflicts;
         this.assignments = assignments;
+        this.crewAssignments = crewAssignments;
         this.depotAccess = depotAccess;
         this.events = events;
         this.clock = clock;
@@ -139,6 +143,12 @@ public class ScheduleService {
     public Schedule publish(Long scheduleId) {
         Schedule schedule = require(scheduleId);
 
+        if (schedule.getStatus() == ScheduleStatus.PUBLISHED) {
+            // Idempotent. A client retrying after a lost response is doing the right thing, and publishing twice
+            // must not create a second version or report a failure for work that already succeeded.
+            log.debug("schedule {} is already published; returning it unchanged", scheduleId);
+            return schedule;
+        }
         if (schedule.getStatus() != ScheduleStatus.VALIDATED) {
             throw new BusinessRuleException(
                     "SCHEDULE_NOT_VALIDATED",
@@ -157,6 +167,7 @@ public class ScheduleService {
                     previous.supersede();
                     schedules.save(previous);
                     assignments.updateScheduleStatus(previous.getId(), ScheduleStatus.SUPERSEDED.name());
+                    crewAssignments.updateScheduleStatus(previous.getId(), ScheduleStatus.SUPERSEDED.name());
                     log.info("superseded schedule {} v{}", previous.getId(), previous.getVersionNo());
                 });
         schedules.flush();
@@ -165,14 +176,18 @@ public class ScheduleService {
         schedule.publish(actor, clock.instant());
         schedules.save(schedule);
         assignments.updateScheduleStatus(scheduleId, ScheduleStatus.PUBLISHED.name());
+        crewAssignments.updateScheduleStatus(scheduleId, ScheduleStatus.PUBLISHED.name());
 
         try {
             schedules.flush();
         } catch (DataIntegrityViolationException e) {
+            // Either exclusion constraint can fire here: a bus in two published blocks, or a crew member in
+            // two published duties. Both are the database refusing something the application thought was fine,
+            // which is exactly why the constraints exist.
             throw new ConflictException(
                     "PUBLISH_WOULD_DOUBLE_BOOK",
-                    "Publishing this schedule would double-book a bus against another published schedule. "
-                            + "Check blocks that run past midnight.");
+                    "Publishing this schedule would double-book a bus or a crew member against another "
+                            + "published schedule. Check duties and blocks that run past midnight.");
         }
 
         events.publishEvent(AuditEvent.of("SCHEDULE_PUBLISHED", "SCHEDULE", scheduleId));

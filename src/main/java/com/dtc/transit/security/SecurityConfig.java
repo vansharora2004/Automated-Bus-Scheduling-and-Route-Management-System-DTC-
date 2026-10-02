@@ -80,6 +80,8 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "MANAGER", "SCHEDULER")
                         .requestMatchers("/api/v1/schedules/**", "/api/v1/schedules")
                         .hasAnyRole("ADMIN", "MANAGER", "SCHEDULER")
+                        .requestMatchers("/api/v1/duty-assignments/**", "/api/v1/duty-assignments")
+                        .hasAnyRole("ADMIN", "MANAGER", "SCHEDULER")
                         // Metrics and API docs are not public. Phase 11 moves them to an internal
                         // management port.
                         .requestMatchers("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")

@@ -8,6 +8,7 @@ import com.dtc.transit.scheduling.engine.assignment.BusAssigner;
 import com.dtc.transit.scheduling.engine.assignment.EvenKilometreBusAssigner;
 import com.dtc.transit.scheduling.engine.constraint.VehicleScheduleValidator;
 import com.dtc.transit.scheduling.engine.duty.LinkedDutyBuilder;
+import com.dtc.transit.scheduling.engine.duty.UnlinkedDutyBuilder;
 import com.dtc.transit.scheduling.engine.model.DepotContext;
 import com.dtc.transit.scheduling.engine.model.DutyPlan;
 import com.dtc.transit.scheduling.engine.model.EngineConflict;
@@ -47,6 +48,7 @@ public class SchedulingEngine {
     private final VehicleScheduleValidator validator;
     private final MinFleetMatchingBlockBuilder lowerBoundBuilder;
     private final LinkedDutyBuilder linkedDutyBuilder;
+    private final UnlinkedDutyBuilder unlinkedDutyBuilder;
 
     /** The default pipeline: greedy blocks, even-kilometre assignment. */
     public SchedulingEngine() {
@@ -60,10 +62,11 @@ public class SchedulingEngine {
         this.validator = new VehicleScheduleValidator();
         this.lowerBoundBuilder = new MinFleetMatchingBlockBuilder();
         this.linkedDutyBuilder = new LinkedDutyBuilder();
+        this.unlinkedDutyBuilder = new UnlinkedDutyBuilder();
     }
 
     public ScheduleResult run(List<TripView> trips, DepotContext context, RuleSet rules) {
-        return run(trips, context, rules, SchedulingMode.LINKED, true, progress -> {});
+        return run(trips, context, rules, SchedulingMode.LINKED, 0L, 0L, true, progress -> {});
     }
 
     /**
@@ -71,6 +74,8 @@ public class SchedulingEngine {
      *
      * @param computeLowerBound whether to compute the optimal fleet size for comparison. Worth it on a normal
      *     run and worth skipping in a tight loop, since it is a second matching over the same trips.
+     * @param seed from the run, so the unlinked local search is reproducible
+     * @param searchBudgetMillis wall-clock ceiling for the local search; zero skips it
      * @param onProgress called with a percentage, so the worker can report progress without the engine knowing
      *     what a run or a database is
      */
@@ -79,6 +84,8 @@ public class SchedulingEngine {
             DepotContext context,
             RuleSet rules,
             SchedulingMode mode,
+            long seed,
+            long searchBudgetMillis,
             boolean computeLowerBound,
             IntConsumer onProgress) {
 
@@ -98,11 +105,23 @@ public class SchedulingEngine {
         blocks = reliefFinder.mark(blocks, context, rules);
 
         onProgress.accept(70);
-        // Stage 3a. Unlinked mode falls through to linked for now: Phase 8 adds the piece cutter and the
-        // unlinked builder, and until it does, producing linked duties is better than producing none.
-        LinkedDutyBuilder.Result dutyResult = linkedDutyBuilder.build(blocks, context, rules);
-        List<DutyPlan> duties = dutyResult.duties();
-        List<HandoverPlan> handovers = dutyResult.handovers();
+        // Stage 3. Linked keeps a crew on one bus; unlinked cuts blocks into pieces and lets a crew combine
+        // pieces from several, which is where the efficiency gain comes from.
+        List<DutyPlan> duties;
+        List<HandoverPlan> handovers;
+        List<EngineConflict> dutyConflicts;
+
+        if (mode == SchedulingMode.UNLINKED) {
+            var unlinked = unlinkedDutyBuilder.build(blocks, context, rules, seed, searchBudgetMillis);
+            duties = unlinked.duties();
+            handovers = unlinked.handovers();
+            dutyConflicts = unlinked.conflicts();
+        } else {
+            var linked = linkedDutyBuilder.build(blocks, context, rules);
+            duties = linked.duties();
+            handovers = linked.handovers();
+            dutyConflicts = linked.conflicts();
+        }
 
         onProgress.accept(80);
         BusAssigner.Result assignment = busAssigner.assign(blocks, context, rules);
@@ -110,7 +129,7 @@ public class SchedulingEngine {
         onProgress.accept(90);
         List<EngineConflict> conflicts = new ArrayList<>(blocks.conflicts());
         conflicts.addAll(assignment.conflicts());
-        conflicts.addAll(dutyResult.conflicts());
+        conflicts.addAll(dutyConflicts);
         // Soft findings recorded against individual duties are lifted to the schedule's conflict list, so a
         // planner sees them without having to open every duty.
         duties.forEach(duty -> conflicts.addAll(duty.conflicts()));
@@ -135,7 +154,8 @@ public class SchedulingEngine {
                 duties,
                 handovers,
                 deduplicated,
-                (System.nanoTime() - startedAt) / 1_000_000);
+                (System.nanoTime() - startedAt) / 1_000_000,
+                OutputHash.of(blocks, duties, assignment.assignments()));
 
         return new ScheduleResult(
                 blocks, assignment.assignments(), duties, handovers, deduplicated, metrics);
@@ -163,7 +183,8 @@ public class SchedulingEngine {
             List<DutyPlan> duties,
             List<HandoverPlan> handovers,
             List<EngineConflict> conflicts,
-            long elapsedMillis) {
+            long elapsedMillis,
+            String outputHash) {
 
         return new ScheduleMetrics(
                 trips.size(),
@@ -187,7 +208,8 @@ public class SchedulingEngine {
                 (int) conflicts.stream()
                         .filter(conflict -> conflict.severity() == Severity.SOFT)
                         .count(),
-                elapsedMillis);
+                elapsedMillis,
+                outputHash);
     }
 
     private static double round(double kilometres) {

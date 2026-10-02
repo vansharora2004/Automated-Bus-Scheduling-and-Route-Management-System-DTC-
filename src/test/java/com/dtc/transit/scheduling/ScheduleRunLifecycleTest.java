@@ -222,11 +222,29 @@ class ScheduleRunLifecycleTest extends SecurityWebTest {
         worker.pollOnce();
         Long scheduleId = scheduleIdOf(runId);
 
+        // Scoped to vehicle scheduling, which is what this test is about. From Phase 9 the same run also
+        // assigns crew, and the S dataset genuinely cannot staff every duty once weekly rest days, leave,
+        // licence expiry and the rest rule are applied. Those shortfalls are a crew finding with their own
+        // test; a blocking conflict from blocks or buses would be a defect here.
+        Integer vehicleConflicts = jdbc.queryForObject(
+                """
+                SELECT count(*) FROM conflict
+                WHERE schedule_id = ? AND severity = 'HARD' AND NOT resolved
+                  AND type <> 'UNASSIGNED_DUTY'
+                """,
+                Integer.class,
+                scheduleId);
+        assertThat(vehicleConflicts)
+                .as("the S dataset should produce no blocking conflicts from blocks or buses")
+                .isZero();
+
+        // Crew shortfalls are accepted so the publication path itself can be exercised.
+        jdbc.update(
+                "UPDATE conflict SET resolved = TRUE, resolved_by = 'test' WHERE schedule_id = ? AND severity = 'HARD'",
+                scheduleId);
+
         ResponseEntity<String> validation = post("/api/v1/schedules/" + scheduleId + "/validate", scheduler);
         assertThat(validation.getStatusCode()).as("%s", validation.getBody()).isEqualTo(HttpStatus.OK);
-        assertThat(support.json(validation).get("blockingConflicts").asLong())
-                .as("the S dataset should schedule without blocking conflicts")
-                .isZero();
         assertThat(support.json(validation).get("valid").asBoolean()).isTrue();
 
         ResponseEntity<String> published = post("/api/v1/schedules/" + scheduleId + "/publish", admin);
