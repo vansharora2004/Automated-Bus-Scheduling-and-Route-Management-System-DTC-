@@ -49,7 +49,12 @@ public class OverlapAnalysisService {
     private final RoutePatternRepository patterns;
     private final PatternStopRepository patternStops;
 
-    public OverlapAnalysisService(RoutePatternRepository patterns, PatternStopRepository patternStops) {
+    private final com.dtc.transit.common.config.SchedulingMetrics metrics;
+
+    public OverlapAnalysisService(
+            RoutePatternRepository patterns, PatternStopRepository patternStops,
+            com.dtc.transit.common.config.SchedulingMetrics metrics) {
+        this.metrics = metrics;
         this.patterns = patterns;
         this.patternStops = patternStops;
     }
@@ -62,7 +67,20 @@ public class OverlapAnalysisService {
      */
     @PreAuthorize("hasAnyRole('ADMIN','MANAGER','PLANNER')")
     @Transactional(readOnly = true)
+    /**
+     * The timed entry point.
+     *
+     * <p>Overlap analysis is the heaviest spatial query here and the one a planner waits on while drawing, so it
+     * is the one worth a timer of its own rather than being lost in the aggregate HTTP histogram.
+     */
     public List<OverlapFinding> analyse(LineString geometry, Settings settings, List<Long> candidateStopIds) {
+        // Timed here rather than left to the aggregate HTTP histogram: this is the heaviest spatial query in the
+        // system and the one a planner waits on while drawing, so it deserves a series of its own.
+        return metrics.overlapTimer().record(() -> analyseTimed(geometry, settings, candidateStopIds));
+    }
+
+    private List<OverlapFinding> analyseTimed(
+            LineString geometry, Settings settings, List<Long> candidateStopIds) {
         return analyseInternal(geometry, settings, candidateStopIds, null, null);
     }
 

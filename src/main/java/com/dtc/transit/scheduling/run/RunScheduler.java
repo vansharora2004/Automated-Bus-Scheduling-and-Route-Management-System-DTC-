@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.dtc.transit.common.config.SchedulingMetrics;
+
 /**
  * The timers: poll the queue, and reap runs whose worker died.
  *
@@ -24,14 +26,20 @@ public class RunScheduler {
 
     private final RunWorker worker;
     private final RunBookkeeper bookkeeper;
+    private final ScheduleRunRepository runs;
+    private final SchedulingMetrics metrics;
     private final boolean enabled;
 
     public RunScheduler(
             RunWorker worker,
             RunBookkeeper bookkeeper,
+            ScheduleRunRepository runs,
+            SchedulingMetrics metrics,
             @Value("${app.scheduling.worker.enabled:true}") boolean enabled) {
         this.worker = worker;
         this.bookkeeper = bookkeeper;
+        this.runs = runs;
+        this.metrics = metrics;
         this.enabled = enabled;
         log.info("run worker polling is {}", enabled ? "enabled" : "disabled");
     }
@@ -48,11 +56,24 @@ public class RunScheduler {
             return;
         }
         try {
+            publishQueueDepth();
             worker.pollOnce();
         } catch (Exception e) {
             // A failure here must not kill the timer: Spring stops rescheduling a task that throws.
             log.error("the run poller failed; it will try again", e);
         }
+    }
+
+    /**
+     * Publishes the queue depth as gauges.
+     *
+     * <p>Done here because this is already the component that runs on a timer and already reads the run table.
+     * Gauges that nothing updates would read zero forever, and the backlog and stuck-run alerts are built on
+     * them, so a gauge nobody sets is an alert that never fires.
+     */
+    private void publishQueueDepth() {
+        metrics.setQueuedRuns(runs.findByStatus(RunStatus.QUEUED).size());
+        metrics.setRunningRuns(runs.findByStatus(RunStatus.RUNNING).size());
     }
 
     @Scheduled(fixedDelayString = "${app.scheduling.worker.reap-interval-ms:30000}")

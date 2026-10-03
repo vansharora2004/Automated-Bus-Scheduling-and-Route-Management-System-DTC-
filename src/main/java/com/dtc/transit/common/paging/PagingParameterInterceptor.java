@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+import com.dtc.transit.common.config.SchedulingMetrics;
 import com.dtc.transit.common.error.InvalidPagingException;
 
 /**
@@ -23,11 +24,36 @@ import com.dtc.transit.common.error.InvalidPagingException;
 @Component
 public class PagingParameterInterceptor implements HandlerInterceptor {
 
+    private final SchedulingMetrics metrics;
+
+    public PagingParameterInterceptor(SchedulingMetrics metrics) {
+        this.metrics = metrics;
+    }
+
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         requireNonNegativeInt(request, "page");
         requirePositiveInt(request, "size");
+        recordRequestedSize(request);
         return true;
+    }
+
+    /**
+     * Records the page size the caller asked for, before it is clamped.
+     *
+     * <p>The clamping is invisible otherwise: a client asking for 5,000 and silently receiving 100 believes it
+     * has everything. This is the metric that shows somebody is paging wrong.
+     */
+    private void recordRequestedSize(HttpServletRequest request) {
+        String raw = request.getParameter("size");
+        if (raw == null) {
+            return;
+        }
+        try {
+            metrics.recordPageSize(Integer.parseInt(raw.trim()));
+        } catch (NumberFormatException e) {
+            // Already rejected above; a malformed size is not worth a second failure path here.
+        }
     }
 
     private static void requireNonNegativeInt(HttpServletRequest request, String name) {
